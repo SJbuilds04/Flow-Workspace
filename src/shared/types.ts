@@ -167,6 +167,19 @@ export interface Generation extends GenerationParams {
 
 export type GenerationEngineId = 'google-flow' | 'local-preview'
 
+/** What the Flow diagnostic found, so a broken entrance is discoverable. */
+export interface FlowDiagnosticsReport {
+  capturedAt: string
+  entryUrl: string
+  finalUrl: string
+  title: string
+  signedIn: boolean
+  isLandingPage: boolean
+  labels: string[]
+  candidateAppUrls: string[]
+  reportPath: string
+}
+
 export interface GenerationProgress {
   generationId: string
   status: GenerationStatus
@@ -181,6 +194,8 @@ export interface Settings {
   engine: GenerationEngineId
   /** Model names offered in the picker, matching Flow's own dropdown labels. */
   flowModels: string[]
+  /** Where the Flow automation starts. Configurable because Google moves it. */
+  flowUrl: string
   defaults: GenerationParams
   reduceMotion: boolean
   /** Launch the browser context with a visible window instead of headless. */

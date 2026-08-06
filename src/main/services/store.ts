@@ -5,6 +5,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Account, AccountIdentity, Generation, Project, Settings, WorkspaceSnapshot } from '@shared/types'
 import { DEFAULT_FLOW_MODELS, DEFAULT_PARAMS } from '@shared/types'
+import { FLOW_URL } from './flow-provider'
 
 const STORE_VERSION = 1
 
@@ -30,6 +31,7 @@ function defaultSettings(): Settings {
     activeAccountId: 'personal',
     engine: 'google-flow',
     flowModels: [...DEFAULT_FLOW_MODELS],
+    flowUrl: FLOW_URL,
     defaults: { ...DEFAULT_PARAMS },
     reduceMotion: false,
     showBrowserWindow: false,

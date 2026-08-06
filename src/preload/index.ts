@@ -3,6 +3,7 @@ import { IpcChannels } from '@shared/ipc'
 import type {
   Account,
   AttachmentRef,
+  FlowDiagnosticsReport,
   Generation,
   GenerationProgress,
   GenerationRequest,
@@ -53,6 +54,11 @@ const api = {
     cancelSignIn: (input: { accountId: string }): Promise<Result<{ accountId: string }>> =>
       invoke(IpcChannels.profileSignInCancel, input),
     signOut: (input: { accountId: string }): Promise<Result<Account>> => invoke(IpcChannels.profileSignOut, input)
+  },
+
+  flow: {
+    diagnose: (input: { accountId: string }): Promise<Result<FlowDiagnosticsReport>> =>
+      invoke(IpcChannels.flowDiagnose, input)
   },
 
   attachments: {
