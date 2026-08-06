@@ -305,8 +305,14 @@ async function waitForResults(
 }
 
 /**
- * Pulls each result into the project's output folder. Fetching from inside the
- * page reuses the session's cookies, which signed URLs require.
+ * Pulls each result into the project's output folder.
+ *
+ * Flow's own download control is tried first, because a `<video>` in a modern
+ * web app is usually fed by MediaSource Extensions: its `src` is a `blob:` URL
+ * backed by a stream, and fetching it yields nothing useful. Asking the app to
+ * export the file gets the real artifact. Fetching the media URL is kept as a
+ * fallback for stills and for any result served as a plain URL, where the
+ * page's cookies sign the request for us.
  */
 async function downloadResults(args: {
   page: Page
@@ -322,21 +328,13 @@ async function downloadResults(args: {
   const outputs: GenerationOutput[] = []
 
   for (const [index, mediaUrl] of mediaUrls.entries()) {
-    const base64 = await page.evaluate(async (source) => {
-      const response = await fetch(source)
-      const buffer = await response.arrayBuffer()
-      const bytes = new Uint8Array(buffer)
-      let binary = ''
-      const CHUNK = 0x8000
-      for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(offset, offset + CHUNK)))
-      }
-      return btoa(binary)
-    }, mediaUrl)
-
     const suffix = mediaUrls.length > 1 ? `-${index + 1}` : ''
     const path = join(outputDirectory, `${generationId}${suffix}.${extension}`)
-    await writeFile(path, Buffer.from(base64, 'base64'))
+
+    const exported = await exportViaFlow(page, index, path)
+    if (!exported) {
+      await fetchMediaToDisk(page, mediaUrl, path)
+    }
 
     outputs.push({
       path,
@@ -346,10 +344,64 @@ async function downloadResults(args: {
   }
 
   if (outputs.length === 0) {
-    throw new FlowUiError('Flow finished but no media could be downloaded.')
+    throw new FlowUiError(
+      'Flow finished, but neither its download control nor the media URL yielded a file. ' +
+        'If the result plays in Flow but will not export here, the clip is likely streamed rather than served as a file.'
+    )
   }
 
   return outputs
+}
+
+/**
+ * Asks Flow to export result `index` and saves what it hands back.
+ * Returns false when no download control could be driven, so the caller can
+ * fall back rather than fail the whole run.
+ */
+async function exportViaFlow(page: Page, index: number, destination: string): Promise<boolean> {
+  const direct = page.getByRole('button', { name: /^download/i })
+
+  try {
+    // The control often lives behind a per-result overflow menu, so reveal it.
+    if ((await direct.count()) === 0) {
+      const overflow = page.getByRole('button', { name: /^(more|more options|more_vert)$/i }).nth(index)
+      if (await overflow.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await overflow.click()
+      }
+    }
+
+    const control = page.getByRole('menuitem', { name: /download/i }).or(direct)
+    const target = control.nth(Math.min(index, Math.max(0, (await control.count()) - 1)))
+
+    if (!(await target.isVisible({ timeout: 4000 }).catch(() => false))) return false
+
+    const [download] = await Promise.all([page.waitForEvent('download', { timeout: 90_000 }), target.click()])
+
+    await download.saveAs(destination)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Fallback: pull the media URL from inside the page, using its cookies. */
+async function fetchMediaToDisk(page: Page, mediaUrl: string, destination: string): Promise<void> {
+  const base64 = await page.evaluate(async (source) => {
+    const response = await fetch(source)
+    if (!response.ok) throw new Error(`Fetch failed with ${response.status}`)
+    const buffer = await response.arrayBuffer()
+    if (buffer.byteLength === 0) throw new Error('The media stream returned no bytes')
+
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    const CHUNK = 0x8000
+    for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(offset, offset + CHUNK)))
+    }
+    return btoa(binary)
+  }, mediaUrl)
+
+  await writeFile(destination, Buffer.from(base64, 'base64'))
 }
 
 /**
