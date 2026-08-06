@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { useState } from 'react'
-import { ArrowLeft, Eye, Flame, Gauge, LogIn, LogOut, Plus, X } from 'lucide-react'
+import { ArrowLeft, Eye, Flame, Gauge, LogIn, LogOut, Plus, Stethoscope, X } from 'lucide-react'
 import {
   FLOW_ASPECT_RATIOS,
   VIDEO_DURATIONS,
@@ -83,6 +83,7 @@ export function SettingsView(): ReactNode {
           </Field>
 
           <ModelListEditor models={settings.flowModels} />
+          <FlowEntryEditor url={settings.flowUrl} />
         </Section>
 
         <Section title="Defaults" description="Applied to every new project and every cleared prompt.">
@@ -229,6 +230,113 @@ function ModelListEditor({ models }: { models: string[] }): ReactNode {
           Add
         </Button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Flow's entrance moves, and `labs.google/fx/tools/flow` serves a marketing
+ * page rather than the tool. The diagnostic opens Flow in the active profile
+ * and reports where it actually landed, whether the profile has a session, and
+ * which in-product links it found — so the right URL gets discovered instead
+ * of guessed.
+ */
+function FlowEntryEditor({ url }: { url: string }): ReactNode {
+  const updateSettings = useWorkspaceStore((state) => state.updateSettings)
+  const diagnoseFlow = useWorkspaceStore((state) => state.diagnoseFlow)
+  const activeAccountId = useWorkspaceStore((state) => state.settings?.activeAccountId)
+  const report = useWorkspaceStore((state) => state.flowDiagnostics)
+
+  const [draft, setDraft] = useState(url)
+  const [running, setRunning] = useState(false)
+
+  const commit = (): void => {
+    const next = draft.trim()
+    if (!next || next === url) {
+      setDraft(url)
+      return
+    }
+    void updateSettings({ flowUrl: next })
+  }
+
+  return (
+    <div className="rounded-2xl border border-edge-subtle bg-surface-1 px-4 py-3.5">
+      <p className="text-sm text-ink">Flow URL</p>
+      <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+        Where automation starts. If runs fail saying they landed on the landing page, diagnose and set this to the
+        address the app itself loads at.
+      </p>
+
+      <div className="mt-3 flex items-center gap-2">
+        <TextField
+          value={draft}
+          aria-label="Flow URL"
+          spellCheck={false}
+          containerClassName="flex-1"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit()
+          }}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={running}
+          iconLeft={<Stethoscope className="size-3.5" />}
+          onClick={async () => {
+            if (!activeAccountId) return
+            setRunning(true)
+            await diagnoseFlow(activeAccountId)
+            setRunning(false)
+          }}
+        >
+          Diagnose
+        </Button>
+      </div>
+
+      {report && (
+        <div className="mt-3 space-y-2 rounded-xl border border-edge-subtle bg-canvas-sunken/60 p-3">
+          <DiagnosticRow label="Landed on" value={report.finalUrl} />
+          <DiagnosticRow label="Signed in" value={report.signedIn ? 'Yes' : 'No — connect a Google account'} />
+          <DiagnosticRow
+            label="Page type"
+            value={report.isLandingPage ? 'Marketing landing page (not the app)' : 'Looks like the app'}
+          />
+          {report.candidateAppUrls.length > 0 && (
+            <div>
+              <p className="text-2xs uppercase tracking-wider text-ink-ghost">Candidate app URLs</p>
+              <div className="mt-1 flex flex-col gap-1">
+                {report.candidateAppUrls.slice(0, 6).map((candidate) => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    onClick={() => {
+                      setDraft(candidate)
+                      void updateSettings({ flowUrl: candidate })
+                    }}
+                    className="truncate rounded-lg px-1.5 py-1 text-left font-mono text-2xs text-accent transition-colors hover:bg-surface-2"
+                  >
+                    {candidate}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="pt-1 text-2xs text-ink-ghost">
+            Full report saved to <span className="font-mono">{report.reportPath}</span>
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiagnosticRow({ label, value }: { label: string; value: string }): ReactNode {
+  return (
+    <div className="flex gap-2 text-2xs">
+      <span className="w-20 shrink-0 uppercase tracking-wider text-ink-ghost">{label}</span>
+      <span className="min-w-0 flex-1 break-all text-ink-muted">{value}</span>
     </div>
   )
 }

@@ -1,6 +1,6 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { copyFile, rm } from 'node:fs/promises'
-import { basename, extname } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { copyFile, rm, writeFile } from 'node:fs/promises'
+import { basename, extname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
 import type {
   Account,
@@ -16,6 +16,7 @@ import type {
   WorkspaceBootstrap
 } from '@shared/types'
 import { pickAttachment, removeAttachment } from './services/attachments'
+import { inspectFlow, type FlowDiagnostics } from './services/flow-provider'
 import { type GenerationEngine } from './services/generation-engine'
 import { fromMediaUrl } from './services/media-url'
 import { type ProfileManager, ProfileUnavailableError, SignInAbandonedError } from './services/profile-manager'
@@ -176,6 +177,23 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
     return ok(updated)
   })
 
+  // -------------------------------------------------------------- diagnostics
+
+  handle<[{ accountId: string }], FlowDiagnostics & { reportPath: string }>(IpcChannels.flowDiagnose, async (input) => {
+    const account = store.findAccount(input.accountId)
+    if (!account) return fail('That profile is not configured.', 'NOT_FOUND')
+
+    // Headed on purpose: the point is for the user to see what Flow serves
+    // this profile, and to be able to click through it themselves.
+    const context = await profiles.acquire(account, { headless: false })
+    const diagnostics = await inspectFlow(context, store.settings.flowUrl)
+
+    const reportPath = join(app.getPath('userData'), 'flow-diagnostics.json')
+    await writeFile(reportPath, JSON.stringify(diagnostics, null, 2), 'utf-8')
+
+    return ok({ ...diagnostics, reportPath })
+  })
+
   // -------------------------------------------------------------- attachments
 
   handle<[{ kind: 'image' | 'video' }], AttachmentRef | null>(IpcChannels.attachmentPick, async (input) => {
@@ -214,7 +232,13 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
       (attachment): attachment is AttachmentRef => Boolean(attachment)
     )
 
-    const generation = await engine.run({ request, account, attachments, engine: store.settings.engine })
+    const generation = await engine.run({
+      request,
+      account,
+      attachments,
+      engine: store.settings.engine,
+      flowUrl: store.settings.flowUrl
+    })
 
     await store.upsertGeneration(generation)
     broadcast(IpcChannels.eventGenerationSettled, generation)

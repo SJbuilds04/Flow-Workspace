@@ -16,6 +16,7 @@ export const IpcChannels = {
   profileSignIn: 'profile:sign-in',
   profileSignInCancel: 'profile:sign-in-cancel',
   profileSignOut: 'profile:sign-out',
+  flowDiagnose: 'flow:diagnose',
 
   generationRun: 'generation:run',
   generationCancel: 'generation:cancel',

@@ -36,6 +36,7 @@ interface RunOptions {
   account: Account
   attachments: AttachmentRef[]
   engine: GenerationEngineId
+  flowUrl: string
 }
 
 interface ActiveRun {
@@ -68,7 +69,7 @@ export class GenerationEngine extends EventEmitter {
     return true
   }
 
-  async run({ request, account, attachments, engine }: RunOptions): Promise<Generation> {
+  async run({ request, account, attachments, engine, flowUrl }: RunOptions): Promise<Generation> {
     const params = normaliseParams(request)
     const startedAt = Date.now()
 
@@ -122,6 +123,7 @@ export class GenerationEngine extends EventEmitter {
           prompt: generation.prompt,
           generationId: generation.id,
           outputDirectory,
+          entryUrl: flowUrl,
           report,
           throwIfCancelled
         })

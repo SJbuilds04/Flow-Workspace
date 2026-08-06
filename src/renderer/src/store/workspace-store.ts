@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   Account,
   AttachmentRef,
+  FlowDiagnosticsReport,
   Generation,
   GenerationParams,
   GenerationProgress,
@@ -47,6 +48,8 @@ interface WorkspaceState {
   activeRun: ActiveRun | null
   /** Set when a profile could not be used; surfaced as a dismissible banner. */
   profileNotice: { accountId: string; message: string } | null
+  /** Latest Flow diagnostic, shown inline in Settings. */
+  flowDiagnostics: FlowDiagnosticsReport | null
 
   bootstrap: () => Promise<void>
   selectProject: (id: string) => void
@@ -63,6 +66,7 @@ interface WorkspaceState {
   signInProfile: (accountId: string) => Promise<boolean>
   cancelSignIn: (accountId: string) => Promise<void>
   signOutProfile: (accountId: string) => Promise<void>
+  diagnoseFlow: (accountId: string) => Promise<void>
   dismissProfileNotice: () => void
 
   patchDraft: (projectId: string, patch: Partial<Draft>) => void
@@ -108,6 +112,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   drafts: {},
   activeRun: null,
   profileNotice: null,
+  flowDiagnostics: null,
 
   bootstrap: async () => {
     // The renderer is a normal Vite app, so the dev server URL can be opened in
@@ -278,6 +283,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) => ({
       accounts: state.accounts.map((account) => (account.id === accountId ? result.data : account))
     }))
+  },
+
+  diagnoseFlow: async (accountId) => {
+    const result = await window.flow.flow.diagnose({ accountId })
+    if (!result.ok) {
+      toast.error('Could not reach Flow', result.error)
+      return
+    }
+
+    set({ flowDiagnostics: result.data })
+
+    if (result.data.isLandingPage) {
+      toast.info(
+        result.data.signedIn ? 'Flow served its landing page' : 'Not signed in to Google',
+        result.data.signedIn
+          ? 'Pick one of the candidate URLs below, or open Flow in this profile and copy the address the app loads at.'
+          : 'Connect a Google account for this profile first.'
+      )
+    } else {
+      toast.success('Flow looks reachable', result.data.finalUrl)
+    }
   },
 
   dismissProfileNotice: () => set({ profileNotice: null }),

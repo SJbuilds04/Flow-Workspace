@@ -2,9 +2,20 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BrowserContext, Locator, Page } from 'playwright-core'
 import type { GenerationOutput, GenerationParams } from '@shared/types'
+import { hasGoogleSession } from './google-session'
 import { toMediaUrl } from './media-url'
 
 export const FLOW_URL = 'https://labs.google/fx/tools/flow'
+
+/**
+ * Copy that only appears on Flow's public landing page. Hitting these means we
+ * are on the brochure, not the tool — either the account has no Flow access, or
+ * the entry URL needs to be the app itself.
+ */
+const LANDING_MARKERS = [/try (in )?google flow/i, /get started/i, /render your sketches/i, /explore tools/i]
+
+/** Anchor text that leads from the landing page into the tool. */
+const ENTRY_LINK_TEXT = /^(try (in )?google flow|get started|open flow|launch)/i
 
 /**
  * Raised when Flow's UI does not look the way we expect. Carries a snapshot of
@@ -34,6 +45,8 @@ export interface FlowRunOptions {
   prompt: string
   generationId: string
   outputDirectory: string
+  /** Where to start; configurable because Google moves the tool's entrance. */
+  entryUrl: string
   report: (stage: string, progress: number) => void
   throwIfCancelled: () => void
 }
@@ -57,14 +70,13 @@ const POLL_MS = 3000
  * present so the mapping can be corrected instead of guessed at.
  */
 export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRunResult> {
-  const { context, params, prompt, generationId, outputDirectory, report, throwIfCancelled } = options
+  const { context, params, prompt, generationId, outputDirectory, entryUrl, report, throwIfCancelled } = options
 
   report('Opening Google Flow', 0.08)
   const page = await context.newPage()
 
   try {
-    await page.goto(FLOW_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-    await assertSignedIn(page)
+    await openFlowApp(page, context, entryUrl)
     throwIfCancelled()
 
     report('Setting up the shot', 0.18)
@@ -99,17 +111,52 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
   }
 }
 
-async function assertSignedIn(page: Page): Promise<void> {
-  // Flow bounces anonymous visitors to a Google sign-in or a marketing page.
-  const url = page.url()
-  if (url.includes('accounts.google.com') || url.includes('/signin')) {
+/**
+ * Gets from the configured entry URL to the actual generation surface.
+ *
+ * `labs.google/fx/tools/flow` serves a marketing page, and the tool lives
+ * behind it. Rather than hardcode a guess at the app URL, follow the landing
+ * page's own call-to-action — whatever Google points that link at is by
+ * definition the current entrance.
+ */
+async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string): Promise<void> {
+  await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+
+  if (page.url().includes('accounts.google.com') || page.url().includes('/signin')) {
     throw new FlowSignedOutError()
   }
 
-  const signInButton = page.getByRole('button', { name: /^(sign in|get started)$/i }).first()
-  if (await signInButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-    throw new FlowSignedOutError()
+  if (!(await isLandingPage(page))) return
+
+  const entry = page.getByRole('link', { name: ENTRY_LINK_TEXT }).first()
+  if (await entry.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await Promise.all([
+      page.waitForLoadState('domcontentloaded').catch(() => undefined),
+      entry.click().catch(() => undefined)
+    ])
+    await page.waitForTimeout(4000)
   }
+
+  if (!(await isLandingPage(page))) return
+
+  // Still on the brochure. Distinguish "not signed in" from "no Flow access",
+  // because the fix is completely different.
+  const signedIn = await hasGoogleSession(context)
+  if (!signedIn) throw new FlowSignedOutError()
+
+  throw new FlowUiError(
+    `Signed in, but ${entryUrl} is still showing Flow's landing page rather than the app. ` +
+      'Open Flow manually in this profile once (Settings → Diagnose Flow), then set the Flow URL to the address the app actually loads at.',
+    await visibleControlLabels(page)
+  )
+}
+
+async function isLandingPage(page: Page): Promise<boolean> {
+  const text = await page
+    .locator('body')
+    .innerText({ timeout: 5000 })
+    .catch(() => '')
+  return LANDING_MARKERS.some((marker) => marker.test(text))
 }
 
 /** Clicks a control identified by its exact visible label. */
@@ -317,23 +364,74 @@ async function visibleControlLabels(page: Page): Promise<string[]> {
         .map((node) => (node.textContent ?? '').trim())
         .filter((text) => text.length > 0 && text.length < 40)
     )
-    return [...new Set(labels)].slice(0, 40)
+    return [...new Set(labels)].filter((label) => !isIconLigature(label)).slice(0, 40)
   } catch {
     return []
   }
+}
+
+/**
+ * Material Symbols render their icon name as text content, so `more_vert` and
+ * `play_arrow` arrive looking like labels. They are never real controls, and
+ * they drown out the ones that are.
+ */
+function isIconLigature(label: string): boolean {
+  return /^[a-z]+(_[a-z]+)+$/.test(label)
 }
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Exposed for the diagnostics command in `ipc.ts`. */
-export async function captureFlowSnapshot(context: BrowserContext): Promise<{ url: string; labels: string[] }> {
+export interface FlowDiagnostics {
+  capturedAt: string
+  entryUrl: string
+  /** Where the browser actually ended up. */
+  finalUrl: string
+  title: string
+  signedIn: boolean
+  isLandingPage: boolean
+  /** Visible control labels, icon-font noise removed. */
+  labels: string[]
+  /** Links that look like they lead into the tool — candidate entry URLs. */
+  candidateAppUrls: string[]
+}
+
+/**
+ * Opens Flow and reports what it found, without generating anything.
+ *
+ * This exists because the entrance moves. Rather than guessing a URL, this
+ * records where the browser landed, whether the profile has a Google session,
+ * and every in-product link on the page — which is how the real app URL gets
+ * discovered instead of invented.
+ */
+export async function inspectFlow(context: BrowserContext, entryUrl: string): Promise<FlowDiagnostics> {
   const page = await context.newPage()
+
   try {
-    await page.goto(FLOW_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-    await page.waitForTimeout(4000)
-    return { url: page.url(), labels: await visibleControlLabels(page) }
+    await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+    // Flow hydrates late; a snapshot taken immediately is mostly empty.
+    await page.waitForTimeout(6000)
+
+    const candidateAppUrls = await page
+      .locator('a[href]')
+      .evaluateAll((nodes) =>
+        nodes
+          .map((node) => (node as unknown as { href?: string }).href ?? '')
+          .filter((href) => href.includes('flow') || href.includes('/fx/'))
+      )
+      .catch(() => [] as string[])
+
+    return {
+      capturedAt: new Date().toISOString(),
+      entryUrl,
+      finalUrl: page.url(),
+      title: await page.title().catch(() => ''),
+      signedIn: await hasGoogleSession(context),
+      isLandingPage: await isLandingPage(page),
+      labels: await visibleControlLabels(page),
+      candidateAppUrls: [...new Set(candidateAppUrls)].slice(0, 30)
+    }
   } finally {
     await page.close().catch(() => undefined)
   }
