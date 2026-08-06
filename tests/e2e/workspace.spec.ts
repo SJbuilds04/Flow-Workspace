@@ -150,4 +150,66 @@ test.describe('settings', () => {
     }
     await expect(window.getByRole('button', { name: 'Start' })).toHaveCount(3)
   })
+
+  test('offers to connect a Google account on every unconnected profile', async ({ window }) => {
+    await window.getByRole('button', { name: 'Settings' }).click()
+
+    await expect(window.getByRole('button', { name: 'Connect Google' })).toHaveCount(3)
+    await expect(window.getByText('No Google account connected').first()).toBeVisible()
+
+    // Nothing is connected yet, so no profile should claim otherwise.
+    await expect(window.getByText('Connected', { exact: true })).toHaveCount(0)
+    await expect(window.getByRole('button', { name: 'Sign out' })).toHaveCount(0)
+  })
+})
+
+test.describe('google sign-in', () => {
+  test('account menu offers the connect action and reports it is not connected', async ({ window }) => {
+    await window.getByRole('button', { name: 'Active profile: Personal' }).click()
+
+    const menu = window.getByRole('menu')
+    await expect(menu.getByRole('menuitem', { name: 'Connect a Google account' })).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Sign out of Google' })).toHaveCount(0)
+    await expect(menu.getByRole('menuitem', { name: 'Personal' })).toContainText('Not connected')
+  })
+
+  test.describe('with Personal already connected', () => {
+    test.use({
+      seedIdentities: {
+        personal: { email: 'studio@sjbuilds.test', connectedAt: '2026-08-06T12:00:00.000Z' }
+      }
+    })
+
+    test('shows the connected identity in settings and in the account menu', async ({ window }) => {
+      await window.getByRole('button', { name: 'Settings' }).click()
+
+      await expect(window.getByText('studio@sjbuilds.test')).toBeVisible()
+      await expect(window.getByRole('button', { name: 'Sign out' })).toHaveCount(1)
+      await expect(window.getByRole('button', { name: 'Connect Google' })).toHaveCount(2)
+
+      await window.getByRole('button', { name: 'Back to workspace' }).click()
+      await window.getByRole('button', { name: 'Active profile: Personal' }).click()
+
+      const menu = window.getByRole('menu')
+      await expect(menu.getByRole('menuitem', { name: 'Personal' })).toContainText('studio@sjbuilds.test')
+      await expect(menu.getByRole('menuitem', { name: 'Sign out of Google' })).toBeVisible()
+      await expect(menu.getByRole('menuitem', { name: 'Connect a Google account' })).toHaveCount(0)
+    })
+
+    test('signing out clears the identity and persists that', async ({ window, userDataDir }) => {
+      await window.getByRole('button', { name: 'Settings' }).click()
+      await window.getByRole('button', { name: 'Sign out' }).click()
+
+      await expect(window.getByRole('button', { name: 'Connect Google' })).toHaveCount(3)
+      await expect(window.getByText('studio@sjbuilds.test')).toHaveCount(0)
+
+      await expect
+        .poll(async () => {
+          const raw = await readFile(join(userDataDir, 'workspace.json'), 'utf-8')
+          const parsed = JSON.parse(raw) as { accounts: { id: string; identity?: unknown }[] }
+          return parsed.accounts.find((account) => account.id === 'personal')?.identity
+        })
+        .toBeNull()
+    })
+  })
 })

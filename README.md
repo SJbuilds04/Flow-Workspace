@@ -56,6 +56,23 @@ The manager tries Google Chrome, then Microsoft Edge, then a plain Chromium buil
 
 Contexts are reused between generations when _Keep profiles warm_ is on, and are always closed before the app exits.
 
+## Connecting a Google account
+
+**Settings → Browser profiles → Connect Google**, or the account menu at the top right.
+
+That opens the profile's own browser **visibly** at `accounts.google.com` and waits up to five minutes while you sign in by hand. The app polls for a session and, once it sees one, stores the identity against the account and closes the sign-in tab. The session lives in the profile directory from then on, so it survives restarts — this is a one-time cost per profile.
+
+Sign-in is deliberately manual. Google blocks scripted credential entry, so there is no version of this that types a password for you; a real person in a real Chrome window is both what works and what should be happening with your own accounts. The profile manager prefers your installed Chrome (then Edge, then bundled Chromium) partly for this reason — stock Chrome clears Google's checks far more often than the Playwright build.
+
+Two things to know about how a connection is detected:
+
+- **The session** is read from the `SID`/`HSID`/`SSID` cookies. That signal is authoritative.
+- **The email, name and avatar** come from `accounts.google.com/ListAccounts`, an undocumented endpoint Chromium itself uses. It can change without notice. If it fails, the profile is still connected — just shown without a label rather than with a guessed one.
+
+**Sign out** clears the profile's cookies. If the profile was never opened there is nothing on disk to clear, so no browser is launched.
+
+Whether to drive a particular Google product's web UI this way is your call against that product's terms — the app gives you signed-in profiles; it does not decide what you point them at.
+
 ## How generation works
 
 `GenerationEngine` takes a request, acquires the account's context, opens a page, and renders `composition.ts` into it — a deterministic canvas composition seeded from the prompt, model, ratio and account, blended with the reference image when one is attached. Image models screenshot the canvas to PNG; video models capture a poster frame plus a WebM clip via `MediaRecorder`. Artifacts land in `userData/outputs/<projectId>/` and progress is streamed to the renderer stage by stage.

@@ -62,6 +62,9 @@ interface WorkspaceState {
   setActiveAccount: (accountId: string) => Promise<void>
   launchProfile: (accountId: string) => Promise<boolean>
   closeProfile: (accountId: string) => Promise<void>
+  signInProfile: (accountId: string) => Promise<boolean>
+  cancelSignIn: (accountId: string) => Promise<void>
+  signOutProfile: (accountId: string) => Promise<void>
   dismissProfileNotice: () => void
 
   patchDraft: (projectId: string, patch: Partial<Draft>) => void
@@ -243,6 +246,43 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) => ({ profileStatuses: { ...state.profileStatuses, [accountId]: result.data } }))
   },
 
+  signInProfile: async (accountId) => {
+    const result = await window.flow.accounts.signIn({ accountId })
+
+    if (!result.ok) {
+      // Backing out of the browser window is a normal outcome, not an error.
+      if (result.code === 'CANCELLED') {
+        toast.info('Sign-in not completed', result.error)
+      } else if (result.code === 'PROFILE_UNAVAILABLE') {
+        set({ profileNotice: { accountId, message: result.error } })
+      } else {
+        toast.error('Could not sign in', result.error)
+      }
+      return false
+    }
+
+    set((state) => ({
+      accounts: state.accounts.map((account) => (account.id === accountId ? result.data : account))
+    }))
+    toast.success('Profile connected', result.data.identity?.email ?? `${result.data.name} is signed in.`)
+    return true
+  },
+
+  cancelSignIn: async (accountId) => {
+    await window.flow.accounts.cancelSignIn({ accountId })
+  },
+
+  signOutProfile: async (accountId) => {
+    const result = await window.flow.accounts.signOut({ accountId })
+    if (!result.ok) {
+      toast.error('Could not sign out', result.error)
+      return
+    }
+    set((state) => ({
+      accounts: state.accounts.map((account) => (account.id === accountId ? result.data : account))
+    }))
+  },
+
   dismissProfileNotice: () => set({ profileNotice: null }),
 
   patchDraft: (projectId, patch) =>
@@ -392,6 +432,12 @@ export function subscribeToMainEvents(): () => void {
     window.flow.events.onProfileStatus((status: ProfileStatus) => {
       useWorkspaceStore.setState((state) => ({
         profileStatuses: { ...state.profileStatuses, [status.accountId]: status }
+      }))
+    }),
+
+    window.flow.events.onAccountUpdated((account: Account) => {
+      useWorkspaceStore.setState((state) => ({
+        accounts: state.accounts.map((item) => (item.id === account.id ? account : item))
       }))
     })
   ]

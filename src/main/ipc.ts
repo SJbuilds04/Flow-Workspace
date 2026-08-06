@@ -18,7 +18,7 @@ import type {
 import { pickAttachment, removeAttachment } from './services/attachments'
 import { type GenerationEngine } from './services/generation-engine'
 import { fromMediaUrl } from './services/media-url'
-import { type ProfileManager, ProfileUnavailableError } from './services/profile-manager'
+import { type ProfileManager, ProfileUnavailableError, SignInAbandonedError } from './services/profile-manager'
 import { type WorkspaceStore } from './services/store'
 
 interface RegisterOptions {
@@ -135,6 +135,45 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
   handle<[{ accountId: string }], ProfileStatus>(IpcChannels.profileClose, async (input) => {
     await profiles.close(input.accountId)
     return ok(profiles.statusFor(input.accountId))
+  })
+
+  handle<[{ accountId: string }], Account>(IpcChannels.profileSignIn, async (input) => {
+    const account = store.findAccount(input.accountId)
+    if (!account) return fail('That profile is not configured.', 'NOT_FOUND')
+
+    try {
+      const identity = await profiles.signIn(account)
+      const updated = await store.setAccountIdentity(account.id, identity)
+      if (!updated) return fail('That profile is not configured.', 'NOT_FOUND')
+
+      broadcast(IpcChannels.eventAccountUpdated, updated)
+      return ok(updated)
+    } catch (error) {
+      if (error instanceof SignInAbandonedError) {
+        return fail(error.message, 'CANCELLED')
+      }
+      if (error instanceof ProfileUnavailableError) {
+        return fail(error.message, 'PROFILE_UNAVAILABLE')
+      }
+      throw error
+    }
+  })
+
+  handle<[{ accountId: string }], { accountId: string }>(IpcChannels.profileSignInCancel, async (input) => {
+    profiles.cancelSignIn(input.accountId)
+    return ok({ accountId: input.accountId })
+  })
+
+  handle<[{ accountId: string }], Account>(IpcChannels.profileSignOut, async (input) => {
+    const account = store.findAccount(input.accountId)
+    if (!account) return fail('That profile is not configured.', 'NOT_FOUND')
+
+    await profiles.signOut(account)
+    const updated = await store.setAccountIdentity(account.id, null)
+    if (!updated) return fail('That profile is not configured.', 'NOT_FOUND')
+
+    broadcast(IpcChannels.eventAccountUpdated, updated)
+    return ok(updated)
   })
 
   // -------------------------------------------------------------- attachments

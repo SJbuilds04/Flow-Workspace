@@ -13,6 +13,9 @@ export const IpcChannels = {
   profileStatuses: 'profile:statuses',
   profileLaunch: 'profile:launch',
   profileClose: 'profile:close',
+  profileSignIn: 'profile:sign-in',
+  profileSignInCancel: 'profile:sign-in-cancel',
+  profileSignOut: 'profile:sign-out',
 
   generationRun: 'generation:run',
   generationCancel: 'generation:cancel',
@@ -33,6 +36,7 @@ export const IpcChannels = {
   eventGenerationProgress: 'event:generation-progress',
   eventGenerationSettled: 'event:generation-settled',
   eventProfileStatus: 'event:profile-status',
+  eventAccountUpdated: 'event:account-updated',
   eventWindowState: 'event:window-state'
 } as const
 

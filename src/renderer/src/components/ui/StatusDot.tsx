@@ -49,7 +49,7 @@ export function StatusDot({ tone, state = 'idle', size = 'md', className }: Stat
         dimension,
         TONE_COLORS[tone],
         state === 'ready' ? TONE_GLOW[tone] : 'opacity-55',
-        state === 'launching' && 'animate-pulse opacity-90',
+        (state === 'launching' || state === 'signing-in') && 'animate-pulse opacity-90',
         className
       )}
     />

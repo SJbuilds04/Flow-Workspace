@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { Account, Generation, Project, Settings, WorkspaceSnapshot } from '@shared/types'
+import type { Account, AccountIdentity, Generation, Project, Settings, WorkspaceSnapshot } from '@shared/types'
 
 const STORE_VERSION = 1
 
@@ -199,6 +199,15 @@ export class WorkspaceStore {
     this.data.generations = this.data.generations.filter((item) => item.id !== id)
     await this.flush()
     return generation
+  }
+
+  /** Records (or clears, with null) the Google account signed into a profile. */
+  async setAccountIdentity(accountId: string, identity: AccountIdentity | null): Promise<Account | undefined> {
+    const account = this.findAccount(accountId)
+    if (!account) return undefined
+    account.identity = identity
+    await this.flush()
+    return { ...account }
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {

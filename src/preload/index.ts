@@ -48,7 +48,11 @@ const api = {
     list: (): Promise<Result<Account[]>> => invoke(IpcChannels.accountList),
     statuses: (): Promise<Result<ProfileStatus[]>> => invoke(IpcChannels.profileStatuses),
     launch: (input: { accountId: string }): Promise<Result<ProfileStatus>> => invoke(IpcChannels.profileLaunch, input),
-    close: (input: { accountId: string }): Promise<Result<ProfileStatus>> => invoke(IpcChannels.profileClose, input)
+    close: (input: { accountId: string }): Promise<Result<ProfileStatus>> => invoke(IpcChannels.profileClose, input),
+    signIn: (input: { accountId: string }): Promise<Result<Account>> => invoke(IpcChannels.profileSignIn, input),
+    cancelSignIn: (input: { accountId: string }): Promise<Result<{ accountId: string }>> =>
+      invoke(IpcChannels.profileSignInCancel, input),
+    signOut: (input: { accountId: string }): Promise<Result<Account>> => invoke(IpcChannels.profileSignOut, input)
   },
 
   attachments: {
@@ -82,7 +86,9 @@ const api = {
     onGenerationSettled: (listener: (payload: Generation) => void): Unsubscribe =>
       subscribe(IpcChannels.eventGenerationSettled, listener),
     onProfileStatus: (listener: (payload: ProfileStatus) => void): Unsubscribe =>
-      subscribe(IpcChannels.eventProfileStatus, listener)
+      subscribe(IpcChannels.eventProfileStatus, listener),
+    onAccountUpdated: (listener: (payload: Account) => void): Unsubscribe =>
+      subscribe(IpcChannels.eventAccountUpdated, listener)
   }
 } as const
 
