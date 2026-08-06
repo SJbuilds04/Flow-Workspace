@@ -1,0 +1,18 @@
+# Prettier is configured with `endOfLine: lf`, and CI runs `format:check` on
+# Windows too. Without this, autocrlf checks files out as CRLF there and every
+# file fails the format check.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.mp4 binary
+*.webm binary
+*.woff binary
+*.woff2 binary
+
+package-lock.json -diff linguist-generated=true
