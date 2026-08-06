@@ -75,9 +75,21 @@ Whether to drive a particular Google product's web UI this way is your call agai
 
 ## How generation works
 
-`GenerationEngine` takes a request, acquires the account's context, opens a page, and renders `composition.ts` into it — a deterministic canvas composition seeded from the prompt, model, ratio and account, blended with the reference image when one is attached. Image models screenshot the canvas to PNG; video models capture a poster frame plus a WebM clip via `MediaRecorder`. Artifacts land in `userData/outputs/<projectId>/` and progress is streamed to the renderer stage by stage.
+Two engines share one code path, chosen in **Settings → Generation engine**. Both run inside the selected account's browser context, and both stream progress to the renderer stage by stage. Artifacts land in `userData/outputs/<projectId>/`.
 
-The provider boundary is `GenerationEngine.run`. Swapping in a hosted model means replacing that method's body; nothing in the renderer, the IPC contract or the history UI depends on how pixels get made.
+### Google Flow (default)
+
+`flow-provider.ts` drives the real [Flow](https://labs.google/fx/tools/flow) web app as the signed-in account: it sets output type, reference mode, ratio, model, duration and output count, writes the prompt, reads Flow's own credit quote, submits, waits for media to appear, and downloads each result from inside the page so the session's cookies sign the request.
+
+Every control is addressed **by its visible label** — `Video`, `10s`, `16:9`, `x2` — never by class name. Flow ships hashed CSS that changes on each deploy, but the text on its buttons is the product surface and moves far less. When a label does go missing, the run fails with the labels that _were_ on the page, so the mapping can be corrected rather than guessed at. The same applies to models: a name that Flow no longer offers produces an error listing what it does offer, and the list is editable in Settings.
+
+This is UI automation against someone else's app. It is inherently brittle — expect to adjust when Flow redesigns, and treat the diagnostics in the error message as the intended repair path.
+
+### Local preview
+
+`composition.ts` rendered in the profile browser: a deterministic canvas composition seeded from the prompt, model, ratio and account, blended with a reference image when one is attached. Stills screenshot to PNG; video captures a poster frame plus a WebM clip via `MediaRecorder`.
+
+It needs no Google account and always produces the same output for the same input, which is what the end-to-end suite runs against (`test.use({ seedSettings: { engine: 'local-preview' } })`).
 
 ## Notes
 

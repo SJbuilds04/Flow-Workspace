@@ -12,13 +12,16 @@ import { expect, test } from './fixtures'
 test.describe('generation', () => {
   test.slow()
 
+  // The local engine renders offline in the profile browser, so these exercise
+  // the full pipeline without depending on a Google Flow account.
+  test.use({ seedSettings: { engine: 'local-preview' } })
+
   test('renders an image and adds it to history', async ({ window }) => {
     const available = await profileCanLaunch(window)
     test.skip(!available, 'No Chromium-family browser available for the profile.')
 
     await window.getByRole('textbox', { name: 'Prompt' }).fill('Molten glass ribbons over a dark sea')
-    await window.getByRole('button', { name: 'Model: Flow Image v2' }).click()
-    await window.getByRole('menuitem', { name: /Flow Image Turbo/ }).click()
+    await window.getByRole('radiogroup', { name: 'Output type' }).getByRole('radio', { name: 'Image' }).click()
 
     await window.getByRole('button', { name: 'Generate' }).click()
 
@@ -30,9 +33,11 @@ test.describe('generation', () => {
     await expect(card).toContainText('Molten glass ribbons over a dark sea')
     await expect(card.locator('img')).toBeVisible()
 
-    // The prompt clears but the model choice is deliberately preserved.
+    // The prompt clears but the settings are deliberately preserved.
     await expect(window.getByRole('textbox', { name: 'Prompt' })).toHaveValue('')
-    await expect(window.getByRole('button', { name: 'Model: Flow Image Turbo' })).toBeVisible()
+    await expect(
+      window.getByRole('radiogroup', { name: 'Output type' }).getByRole('radio', { name: 'Image' })
+    ).toHaveAttribute('aria-checked', 'true')
   })
 
   test('writes the artifact to the project output folder', async ({ window, userDataDir }) => {
@@ -40,6 +45,7 @@ test.describe('generation', () => {
     test.skip(!available, 'No Chromium-family browser available for the profile.')
 
     await window.getByRole('textbox', { name: 'Prompt' }).fill('Chrome monolith at dusk')
+    await window.getByRole('radiogroup', { name: 'Output type' }).getByRole('radio', { name: 'Image' }).click()
     await window.getByRole('button', { name: 'Generate' }).click()
 
     await expect(window.locator('article').first()).toBeVisible({ timeout: 120_000 })
@@ -58,6 +64,7 @@ test.describe('generation', () => {
     test.skip(!available, 'No Chromium-family browser available for the profile.')
 
     await window.getByRole('textbox', { name: 'Prompt' }).fill('Aurora over a frozen lake')
+    await window.getByRole('radiogroup', { name: 'Output type' }).getByRole('radio', { name: 'Image' }).click()
     await window.getByRole('button', { name: 'Generate' }).click()
 
     const card = window.locator('article').first()

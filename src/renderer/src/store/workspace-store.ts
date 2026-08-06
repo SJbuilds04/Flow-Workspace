@@ -1,25 +1,23 @@
 import { create } from 'zustand'
 import type {
   Account,
-  AspectRatioId,
   AttachmentRef,
   Generation,
+  GenerationParams,
   GenerationProgress,
-  ModelId,
   ProfileStatus,
   Project,
   Settings
 } from '@shared/types'
+import { DEFAULT_PARAMS } from '@shared/types'
 import { toast } from './toast-store'
 
 export type WorkspaceView = 'project' | 'settings'
 export type BootStatus = 'loading' | 'ready' | 'error'
 
 /** Per-project composer state, so switching projects never loses a draft. */
-export interface Draft {
+export interface Draft extends GenerationParams {
   prompt: string
-  modelId: ModelId
-  aspectRatio: AspectRatioId
   referenceImage: AttachmentRef | null
   referenceVideo: AttachmentRef | null
 }
@@ -82,9 +80,8 @@ interface WorkspaceState {
 
 export function emptyDraft(settings: Settings | null): Draft {
   return {
+    ...(settings?.defaults ?? DEFAULT_PARAMS),
     prompt: '',
-    modelId: settings?.defaultModelId ?? 'flow-image-v2',
-    aspectRatio: settings?.defaultAspectRatio ?? '16:9',
     referenceImage: null,
     referenceVideo: null
   }
@@ -325,14 +322,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       profileNotice: null
     })
 
+    const { prompt, referenceImage, referenceVideo, ...params } = draft
+
     const result = await window.flow.generations.run({
+      ...params,
       projectId,
       accountId: settings.activeAccountId,
-      prompt: draft.prompt,
-      modelId: draft.modelId,
-      aspectRatio: draft.aspectRatio,
-      referenceImage: draft.referenceImage,
-      referenceVideo: draft.referenceVideo
+      prompt,
+      referenceImage,
+      referenceVideo
     })
 
     set({ activeRun: null })

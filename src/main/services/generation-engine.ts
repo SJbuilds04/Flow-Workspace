@@ -7,18 +7,21 @@ import type {
   Account,
   AttachmentRef,
   Generation,
+  GenerationEngineId,
+  GenerationOutput,
+  GenerationParams,
   GenerationProgress,
-  GenerationRequest,
-  ModelOption
+  GenerationRequest
 } from '@shared/types'
-import { findAspectRatio, findModel } from '@shared/types'
-import { compositionHtml, seedFromString, type CompositionConfig } from './composition'
+import { findFlowAspect, normaliseParams } from '@shared/types'
 import { mimeTypeFor } from './attachments'
+import { compositionHtml, seedFromString, type CompositionConfig } from './composition'
+import { FlowSignedOutError, FlowUiError, runFlowGeneration } from './flow-provider'
 import { toMediaUrl } from './media-url'
 import { paths } from './paths'
 import { type ProfileManager, ProfileUnavailableError } from './profile-manager'
 
-/** Largest reference file we will inline into the render page. */
+/** Largest reference file we will inline into the local render page. */
 const MAX_REFERENCE_BYTES = 12 * 1024 * 1024
 
 export class GenerationCancelledError extends Error {
@@ -32,6 +35,7 @@ interface RunOptions {
   request: GenerationRequest
   account: Account
   attachments: AttachmentRef[]
+  engine: GenerationEngineId
 }
 
 interface ActiveRun {
@@ -39,9 +43,12 @@ interface ActiveRun {
 }
 
 /**
- * Turns a request into a finished artifact by driving the account's persistent
- * browser context. Progress is emitted as it goes so the UI can show real
- * stages rather than a fake spinner.
+ * Turns a request into finished artifacts by driving the account's persistent
+ * browser context.
+ *
+ * Two engines share that context. `google-flow` operates the real Flow web app
+ * as the signed-in account; `local-preview` renders a deterministic composition
+ * locally, which needs no account and is what the end-to-end tests run against.
  */
 export class GenerationEngine extends EventEmitter {
   private readonly active = new Map<string, ActiveRun>()
@@ -61,20 +68,20 @@ export class GenerationEngine extends EventEmitter {
     return true
   }
 
-  async run({ request, account, attachments }: RunOptions): Promise<Generation> {
-    const model = findModel(request.modelId)
-    const ratio = findAspectRatio(request.aspectRatio)
+  async run({ request, account, attachments, engine }: RunOptions): Promise<Generation> {
+    const params = normaliseParams(request)
     const startedAt = Date.now()
 
     const generation: Generation = {
+      ...params,
       id: randomUUID(),
       projectId: request.projectId,
       accountId: request.accountId,
       prompt: request.prompt.trim(),
-      modelId: model.id,
-      aspectRatio: ratio.id,
       status: 'queued',
       createdAt: new Date().toISOString(),
+      engine,
+      outputs: [],
       attachments
     }
 
@@ -90,52 +97,53 @@ export class GenerationEngine extends EventEmitter {
     }
 
     const report = (stage: string, progress: number): void => {
-      const payload: GenerationProgress = {
+      this.emit('progress', {
         generationId: generation.id,
         status: 'running',
         progress,
         stage
-      }
-      this.emit('progress', payload)
+      } satisfies GenerationProgress)
     }
-
-    let page: Page | undefined
 
     try {
       generation.status = 'running'
-      report(`Waking the ${account.name} profile`, 0.05)
+      report(`Waking the ${account.name} profile`, 0.04)
 
       const context = await this.profiles.acquire(account)
       throwIfCancelled()
 
-      report('Preparing the render surface', 0.2)
-      page = await context.newPage()
-      await page.setViewportSize({ width: ratio.width, height: ratio.height })
-      await page.setContent(compositionHtml(), { waitUntil: 'load' })
-      throwIfCancelled()
-
-      report('Reading reference material', 0.32)
-      const referenceImage = await this.referenceDataUri(attachments)
-      throwIfCancelled()
-
-      const config: CompositionConfig = {
-        prompt: generation.prompt,
-        modelName: model.name,
-        aspectLabel: ratio.label,
-        width: ratio.width,
-        height: ratio.height,
-        seed: seedFromString(`${generation.prompt}|${model.id}|${ratio.id}|${account.id}`),
-        durationSeconds: model.id === 'flow-video-cinematic' ? 6 : 4,
-        ...(referenceImage ? { referenceImage } : {})
-      }
-
       const outputDirectory = paths.outputsFor(generation.projectId)
       await mkdir(outputDirectory, { recursive: true })
 
-      if (model.kind === 'video') {
-        await this.renderVideo({ page, config, model, generation, outputDirectory, report, throwIfCancelled })
+      if (engine === 'google-flow') {
+        const result = await runFlowGeneration({
+          context,
+          params,
+          prompt: generation.prompt,
+          generationId: generation.id,
+          outputDirectory,
+          report,
+          throwIfCancelled
+        })
+        generation.outputs = result.outputs
+        if (result.creditsUsed !== undefined) generation.creditsUsed = result.creditsUsed
       } else {
-        await this.renderImage({ page, config, generation, outputDirectory, report, throwIfCancelled })
+        generation.outputs = await this.renderLocally({
+          context,
+          params,
+          generation,
+          attachments,
+          outputDirectory,
+          report,
+          throwIfCancelled
+        })
+      }
+
+      const first = generation.outputs[0]
+      if (first) {
+        generation.outputPath = first.path
+        generation.outputUrl = first.url
+        generation.thumbnailUrl = first.thumbnailUrl ?? (first.kind === 'image' ? first.url : undefined)
       }
 
       generation.status = 'completed'
@@ -149,84 +157,104 @@ export class GenerationEngine extends EventEmitter {
       } satisfies GenerationProgress)
     } catch (error) {
       generation.durationMs = Date.now() - startedAt
-      if (error instanceof GenerationCancelledError || cancelled) {
-        generation.status = 'cancelled'
-        generation.error = 'Cancelled.'
-      } else if (error instanceof ProfileUnavailableError) {
-        generation.status = 'failed'
-        generation.error = error.message
-      } else {
-        generation.status = 'failed'
-        generation.error = error instanceof Error ? error.message : String(error)
-      }
+      generation.status = error instanceof GenerationCancelledError || cancelled ? 'cancelled' : 'failed'
+      generation.error = describeFailure(error, cancelled)
+
       this.emit('progress', {
         generationId: generation.id,
         status: generation.status,
         progress: 1,
-        stage: generation.error ?? 'Failed'
+        stage: generation.error
       } satisfies GenerationProgress)
     } finally {
       this.active.delete(generation.id)
-      if (page) {
-        await page.close().catch(() => undefined)
-      }
     }
 
     return generation
   }
 
-  private async renderImage(args: {
-    page: Page
-    config: CompositionConfig
+  /**
+   * The offline engine: renders a deterministic composition in the profile
+   * browser. Same prompt and settings always produce the same frame, which is
+   * what makes the end-to-end tests assertable without touching a real service.
+   */
+  private async renderLocally(args: {
+    context: Awaited<ReturnType<ProfileManager['acquire']>>
+    params: GenerationParams
     generation: Generation
+    attachments: AttachmentRef[]
     outputDirectory: string
     report: (stage: string, progress: number) => void
     throwIfCancelled: () => void
-  }): Promise<void> {
-    const { page, config, generation, outputDirectory, report, throwIfCancelled } = args
+  }): Promise<GenerationOutput[]> {
+    const { context, params, generation, attachments, outputDirectory, report, throwIfCancelled } = args
+    const ratio = findFlowAspect(params.aspectRatio)
 
-    report('Composing the frame', 0.55)
-    const base64 = await page.evaluate((input) => window.flowRenderStill(input), config)
-    throwIfCancelled()
+    report('Preparing the render surface', 0.2)
+    const page: Page = await context.newPage()
 
-    report('Writing the artifact', 0.85)
-    const outputPath = join(outputDirectory, `${generation.id}.png`)
-    await writeFile(outputPath, Buffer.from(base64, 'base64'))
+    try {
+      await page.setViewportSize({ width: ratio.width, height: ratio.height })
+      await page.setContent(compositionHtml(), { waitUntil: 'load' })
+      throwIfCancelled()
 
-    generation.outputPath = outputPath
-    generation.outputUrl = toMediaUrl('outputs', outputPath)
-    generation.thumbnailUrl = generation.outputUrl
-  }
+      report('Reading reference material', 0.32)
+      const referenceImage = await this.referenceDataUri(attachments)
+      throwIfCancelled()
 
-  private async renderVideo(args: {
-    page: Page
-    config: CompositionConfig
-    model: ModelOption
-    generation: Generation
-    outputDirectory: string
-    report: (stage: string, progress: number) => void
-    throwIfCancelled: () => void
-  }): Promise<void> {
-    const { page, config, generation, outputDirectory, report, throwIfCancelled } = args
+      const outputs: GenerationOutput[] = []
 
-    report('Rendering the poster frame', 0.45)
-    const posterBase64 = await page.evaluate((input) => window.flowRenderPoster(input), config)
-    throwIfCancelled()
+      for (let index = 0; index < params.outputCount; index += 1) {
+        const config: CompositionConfig = {
+          prompt: generation.prompt,
+          modelName: params.model,
+          aspectLabel: ratio.label,
+          width: ratio.width,
+          height: ratio.height,
+          seed: seedFromString(
+            `${generation.prompt}|${params.model}|${params.aspectRatio}|${generation.accountId}|${index}`
+          ),
+          durationSeconds: params.durationSeconds,
+          ...(referenceImage ? { referenceImage } : {})
+        }
 
-    const posterPath = join(outputDirectory, `${generation.id}-poster.png`)
-    await writeFile(posterPath, Buffer.from(posterBase64, 'base64'))
-    generation.thumbnailUrl = toMediaUrl('outputs', posterPath)
+        const suffix = params.outputCount > 1 ? `-${index + 1}` : ''
+        const progressBase = 0.4 + (index / params.outputCount) * 0.5
 
-    report(`Capturing ${config.durationSeconds ?? 4}s of motion`, 0.6)
-    const clipBase64 = await page.evaluate((input) => window.flowRenderClip(input), config)
-    throwIfCancelled()
+        if (params.mode === 'video') {
+          report(`Rendering the poster frame${suffix}`, progressBase)
+          const poster = await page.evaluate((input) => window.flowRenderPoster(input), config)
+          const posterPath = join(outputDirectory, `${generation.id}${suffix}-poster.png`)
+          await writeFile(posterPath, Buffer.from(poster, 'base64'))
+          throwIfCancelled()
 
-    report('Writing the artifact', 0.9)
-    const outputPath = join(outputDirectory, `${generation.id}.webm`)
-    await writeFile(outputPath, Buffer.from(clipBase64, 'base64'))
+          report(`Capturing ${params.durationSeconds}s of motion${suffix}`, progressBase + 0.1)
+          const clip = await page.evaluate((input) => window.flowRenderClip(input), config)
+          const clipPath = join(outputDirectory, `${generation.id}${suffix}.webm`)
+          await writeFile(clipPath, Buffer.from(clip, 'base64'))
 
-    generation.outputPath = outputPath
-    generation.outputUrl = toMediaUrl('outputs', outputPath)
+          outputs.push({
+            path: clipPath,
+            url: toMediaUrl('outputs', clipPath),
+            thumbnailUrl: toMediaUrl('outputs', posterPath),
+            kind: 'video'
+          })
+        } else {
+          report(`Composing the frame${suffix}`, progressBase)
+          const still = await page.evaluate((input) => window.flowRenderStill(input), config)
+          const stillPath = join(outputDirectory, `${generation.id}${suffix}.png`)
+          await writeFile(stillPath, Buffer.from(still, 'base64'))
+
+          outputs.push({ path: stillPath, url: toMediaUrl('outputs', stillPath), kind: 'image' })
+        }
+
+        throwIfCancelled()
+      }
+
+      return outputs
+    } finally {
+      await page.close().catch(() => undefined)
+    }
   }
 
   private async referenceDataUri(attachments: AttachmentRef[]): Promise<string | undefined> {
@@ -241,4 +269,12 @@ export class GenerationEngine extends EventEmitter {
       return undefined
     }
   }
+}
+
+function describeFailure(error: unknown, cancelled: boolean): string {
+  if (error instanceof GenerationCancelledError || cancelled) return 'Cancelled.'
+  if (error instanceof FlowSignedOutError) return error.message
+  if (error instanceof FlowUiError) return error.message
+  if (error instanceof ProfileUnavailableError) return error.message
+  return error instanceof Error ? error.message : String(error)
 }

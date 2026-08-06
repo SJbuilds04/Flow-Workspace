@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Account, AccountIdentity, Generation, Project, Settings, WorkspaceSnapshot } from '@shared/types'
+import { DEFAULT_FLOW_MODELS, DEFAULT_PARAMS } from '@shared/types'
 
 const STORE_VERSION = 1
 
@@ -27,8 +28,9 @@ function defaultAccounts(): Account[] {
 function defaultSettings(): Settings {
   return {
     activeAccountId: 'personal',
-    defaultModelId: 'flow-image-v2',
-    defaultAspectRatio: '16:9',
+    engine: 'google-flow',
+    flowModels: [...DEFAULT_FLOW_MODELS],
+    defaults: { ...DEFAULT_PARAMS },
     reduceMotion: false,
     showBrowserWindow: false,
     keepProfilesWarm: true
@@ -102,7 +104,14 @@ export class WorkspaceStore {
   private migrate(parsed: Partial<PersistedShape>): PersistedShape {
     const base = defaultSnapshot()
     const accounts = parsed.accounts?.length ? parsed.accounts : base.accounts
-    const settings: Settings = { ...base.settings, ...parsed.settings }
+    const settings: Settings = {
+      ...base.settings,
+      ...parsed.settings,
+      // Nested objects must merge too, or a file written by an older build
+      // leaves `defaults` partially populated.
+      defaults: { ...base.settings.defaults, ...parsed.settings?.defaults },
+      flowModels: parsed.settings?.flowModels?.length ? parsed.settings.flowModels : base.settings.flowModels
+    }
 
     if (!accounts.some((account) => account.id === settings.activeAccountId)) {
       settings.activeAccountId = accounts[0]?.id ?? base.settings.activeAccountId

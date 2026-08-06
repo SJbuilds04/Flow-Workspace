@@ -54,27 +54,46 @@ export interface Project {
   updatedAt: string
 }
 
-export type AspectRatioId = '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '21:9'
+/** What Flow is being asked to produce. */
+export type GenerationMode = 'image' | 'video'
 
-export interface AspectRatio {
-  id: AspectRatioId
+/**
+ * Flow's two ways of feeding reference material into a video:
+ * `frames` pins the first/last frame, `ingredients` supplies subjects, styles
+ * or objects the shot should contain.
+ */
+export type VideoInputMode = 'frames' | 'ingredients'
+
+/** Flow offers exactly these two ratios. */
+export type FlowAspectRatio = '16:9' | '9:16'
+
+export type VideoDuration = 4 | 6 | 8 | 10
+
+export type OutputCount = 1 | 2 | 3 | 4
+
+export const VIDEO_DURATIONS: readonly VideoDuration[] = [4, 6, 8, 10] as const
+export const OUTPUT_COUNTS: readonly OutputCount[] = [1, 2, 3, 4] as const
+
+export const FLOW_ASPECT_RATIOS: readonly { id: FlowAspectRatio; label: string; width: number; height: number }[] = [
+  { id: '9:16', label: '9:16', width: 720, height: 1280 },
+  { id: '16:9', label: '16:9', width: 1280, height: 720 }
+] as const
+
+/**
+ * Model names are stored as free text rather than a fixed union: Flow renames
+ * and rotates its models, and the automation selects one by the visible label
+ * in Flow's own dropdown. When a stored name is no longer offered, the run
+ * fails with the list Flow actually showed, which is how the list gets fixed.
+ */
+export const DEFAULT_FLOW_MODELS: readonly string[] = ['Omni Flash'] as const
+
+export function findFlowAspect(id: FlowAspectRatio): {
+  id: FlowAspectRatio
   label: string
-  description: string
   width: number
   height: number
-}
-
-export type ModelId = 'flow-image-v2' | 'flow-image-turbo' | 'flow-video-v1' | 'flow-video-cinematic'
-
-export type ModelKind = 'image' | 'video'
-
-export interface ModelOption {
-  id: ModelId
-  name: string
-  kind: ModelKind
-  description: string
-  /** Rough guidance surfaced in the picker. */
-  latency: string
+} {
+  return FLOW_ASPECT_RATIOS.find((ratio) => ratio.id === id) ?? FLOW_ASPECT_RATIOS[1]!
 }
 
 export interface AttachmentRef {
@@ -91,37 +110,62 @@ export interface AttachmentRef {
 
 export type GenerationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
-export interface GenerationRequest {
+/** The knobs Flow's generation panel exposes, in one place. */
+export interface GenerationParams {
+  mode: GenerationMode
+  /** Only meaningful when `mode` is `video`. */
+  inputMode: VideoInputMode
+  aspectRatio: FlowAspectRatio
+  /** Visible model name as it appears in Flow's dropdown. */
+  model: string
+  /** Only meaningful when `mode` is `video`. */
+  durationSeconds: VideoDuration
+  outputCount: OutputCount
+}
+
+export interface GenerationRequest extends GenerationParams {
   projectId: string
   accountId: string
   prompt: string
-  modelId: ModelId
-  aspectRatio: AspectRatioId
   /** Already-imported files, as returned by the attachment picker. */
   referenceImage?: AttachmentRef | null
   referenceVideo?: AttachmentRef | null
 }
 
-export interface Generation {
+/** One artifact produced by a run. A single request can return several. */
+export interface GenerationOutput {
+  /** Absolute path of the artifact on disk. */
+  path: string
+  /** `flow-media://` URL for the artifact. */
+  url: string
+  /** `flow-media://` URL for the poster frame, when the artifact is a video. */
+  thumbnailUrl?: string
+  kind: 'image' | 'video'
+}
+
+export interface Generation extends GenerationParams {
   id: string
   projectId: string
   accountId: string
   prompt: string
-  modelId: ModelId
-  aspectRatio: AspectRatioId
   status: GenerationStatus
   createdAt: string
   completedAt?: string
-  /** Absolute path of the rendered artifact. */
+  /** Which engine produced this — Flow, or the local preview renderer. */
+  engine: GenerationEngineId
+  outputs: GenerationOutput[]
+  /** First output, kept flat for the card and viewer. */
   outputPath?: string
-  /** `flow-media://` URL for the artifact. */
   outputUrl?: string
-  /** `flow-media://` URL for the poster/thumbnail frame. */
   thumbnailUrl?: string
   attachments: AttachmentRef[]
   error?: string
   durationMs?: number
+  /** Credits Flow reported for the run, when it could be read. */
+  creditsUsed?: number
 }
+
+export type GenerationEngineId = 'google-flow' | 'local-preview'
 
 export interface GenerationProgress {
   generationId: string
@@ -133,8 +177,11 @@ export interface GenerationProgress {
 
 export interface Settings {
   activeAccountId: string
-  defaultModelId: ModelId
-  defaultAspectRatio: AspectRatioId
+  /** Which engine runs generations. */
+  engine: GenerationEngineId
+  /** Model names offered in the picker, matching Flow's own dropdown labels. */
+  flowModels: string[]
+  defaults: GenerationParams
   reduceMotion: boolean
   /** Launch the browser context with a visible window instead of headless. */
   showBrowserWindow: boolean
@@ -161,52 +208,31 @@ export type Result<T> = { ok: true; data: T } | { ok: false; error: string; code
 export type ResultCode =
   'PROFILE_UNAVAILABLE' | 'PROFILE_BUSY' | 'NOT_FOUND' | 'INVALID_INPUT' | 'IO_ERROR' | 'CANCELLED' | 'UNKNOWN'
 
-export const ASPECT_RATIOS: readonly AspectRatio[] = [
-  { id: '1:1', label: '1:1', description: 'Square', width: 1024, height: 1024 },
-  { id: '16:9', label: '16:9', description: 'Widescreen', width: 1280, height: 720 },
-  { id: '9:16', label: '9:16', description: 'Vertical', width: 720, height: 1280 },
-  { id: '4:3', label: '4:3', description: 'Classic', width: 1152, height: 864 },
-  { id: '3:4', label: '3:4', description: 'Portrait', width: 864, height: 1152 },
-  { id: '21:9', label: '21:9', description: 'Cinematic', width: 1512, height: 648 }
-] as const
-
-export const MODELS: readonly ModelOption[] = [
-  {
-    id: 'flow-image-v2',
-    name: 'Flow Image v2',
-    kind: 'image',
-    description: 'Highest fidelity stills with strong prompt adherence.',
-    latency: '~30s'
-  },
-  {
-    id: 'flow-image-turbo',
-    name: 'Flow Image Turbo',
-    kind: 'image',
-    description: 'Fast drafts for exploring composition and colour.',
-    latency: '~8s'
-  },
-  {
-    id: 'flow-video-v1',
-    name: 'Flow Video v1',
-    kind: 'video',
-    description: 'Short motion clips from a prompt or reference frame.',
-    latency: '~2m'
-  },
-  {
-    id: 'flow-video-cinematic',
-    name: 'Flow Video Cinematic',
-    kind: 'video',
-    description: 'Longer takes with camera motion and depth cues.',
-    latency: '~4m'
-  }
-] as const
-
-export function findAspectRatio(id: AspectRatioId): AspectRatio {
-  const match = ASPECT_RATIOS.find((ratio) => ratio.id === id)
-  return match ?? (ASPECT_RATIOS[0] as AspectRatio)
+export const DEFAULT_PARAMS: GenerationParams = {
+  mode: 'video',
+  inputMode: 'ingredients',
+  aspectRatio: '16:9',
+  model: DEFAULT_FLOW_MODELS[0]!,
+  durationSeconds: 8,
+  outputCount: 1
 }
 
-export function findModel(id: ModelId): ModelOption {
-  const match = MODELS.find((model) => model.id === id)
-  return match ?? (MODELS[0] as ModelOption)
+/**
+ * Credit estimate, extrapolated from a single observed data point: Flow quoted
+ * 15 credits for one 10-second clip. It is shown as an approximation and is
+ * replaced by the real figure once a run reads Flow's own quote.
+ */
+const CREDITS_PER_SECOND = 1.5
+
+export function estimateCredits(params: GenerationParams): number {
+  if (params.mode === 'image') return params.outputCount
+  return Math.round(params.durationSeconds * CREDITS_PER_SECOND) * params.outputCount
+}
+
+/** Strips the fields that do not apply to the current mode. */
+export function normaliseParams(params: GenerationParams): GenerationParams {
+  if (params.mode === 'image') {
+    return { ...params, inputMode: 'ingredients', durationSeconds: params.durationSeconds }
+  }
+  return params
 }

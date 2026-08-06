@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { AlertCircle, Download, FolderOpen, MoreHorizontal, Play, Trash2 } from 'lucide-react'
-import { findAspectRatio, findModel, type Generation } from '@shared/types'
+import { findFlowAspect, type Generation } from '@shared/types'
 import { cn } from '@/lib/cn'
 import { formatDateTime, formatDuration, formatRelative } from '@/lib/format'
 import { IconButton } from '@/components/ui/IconButton'
@@ -19,8 +19,7 @@ interface GenerationCardProps {
 
 export function GenerationCard({ generation, onDownload, onReveal, onDelete, onOpen }: GenerationCardProps): ReactNode {
   const [imageFailed, setImageFailed] = useState(false)
-  const ratio = findAspectRatio(generation.aspectRatio)
-  const model = findModel(generation.modelId)
+  const ratio = findFlowAspect(generation.aspectRatio)
   const failed = generation.status === 'failed' || generation.status === 'cancelled'
   const thumbnail = generation.thumbnailUrl ?? generation.outputUrl
 
@@ -67,7 +66,7 @@ export function GenerationCard({ generation, onDownload, onReveal, onDelete, onO
           </div>
         )}
 
-        {model.kind === 'video' && !failed && (
+        {generation.mode === 'video' && !failed && (
           <span className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 rounded-lg bg-black/55 px-2 py-1 backdrop-blur-sm">
             <Play className="size-2.5 fill-white text-white" aria-hidden />
             <span className="text-2xs font-medium text-white">Video</span>

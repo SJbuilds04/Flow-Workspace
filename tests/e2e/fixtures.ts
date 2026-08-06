@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
-import type { Account, AccountIdentity } from '@shared/types'
+import type { Account, AccountIdentity, Settings } from '@shared/types'
 
 /**
  * Mirrors the store's default accounts. Seeding writes a workspace file *before*
@@ -28,6 +28,12 @@ interface FlowOptions {
    * fixture override rather than as an option value.
    */
   seedIdentities: Record<string, AccountIdentity> | null
+
+  /**
+   * Settings to write before the app boots. Suites that exercise generation set
+   * `{ engine: 'local-preview' }` so they never reach out to labs.google.
+   */
+  seedSettings: Partial<Settings> | null
 }
 
 interface FlowFixtures {
@@ -45,6 +51,7 @@ interface FlowFixtures {
  */
 export const test = base.extend<FlowOptions & FlowFixtures>({
   seedIdentities: [null, { option: true }],
+  seedSettings: [null, { option: true }],
 
   userDataDir: async ({}, use) => {
     const directory = await mkdtemp(join(tmpdir(), 'flow-workspace-e2e-'))
@@ -52,14 +59,18 @@ export const test = base.extend<FlowOptions & FlowFixtures>({
     await rm(directory, { recursive: true, force: true }).catch(() => undefined)
   },
 
-  app: async ({ userDataDir, seedIdentities }, use) => {
-    if (seedIdentities) {
+  app: async ({ userDataDir, seedIdentities, seedSettings }, use) => {
+    if (seedIdentities || seedSettings) {
       const accounts = defaultAccounts().map((account) => {
-        const identity = seedIdentities[account.id]
+        const identity = seedIdentities?.[account.id]
         return identity ? { ...account, identity } : account
       })
       // Anything omitted is filled in by the store's own migration step.
-      await writeFile(join(userDataDir, 'workspace.json'), JSON.stringify({ version: 1, accounts }, null, 2), 'utf-8')
+      await writeFile(
+        join(userDataDir, 'workspace.json'),
+        JSON.stringify({ version: 1, accounts, ...(seedSettings ? { settings: seedSettings } : {}) }, null, 2),
+        'utf-8'
+      )
     }
 
     // Some parent processes (VS Code's extension host, for one) export

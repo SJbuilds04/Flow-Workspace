@@ -1,0 +1,342 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import type { BrowserContext, Locator, Page } from 'playwright-core'
+import type { GenerationOutput, GenerationParams } from '@shared/types'
+import { toMediaUrl } from './media-url'
+
+export const FLOW_URL = 'https://labs.google/fx/tools/flow'
+
+/**
+ * Raised when Flow's UI does not look the way we expect. Carries a snapshot of
+ * what *was* on the page, because a selector that stopped matching is only
+ * fixable if you can see what replaced it.
+ */
+export class FlowUiError extends Error {
+  readonly diagnostics: string[]
+
+  constructor(message: string, diagnostics: string[] = []) {
+    super(diagnostics.length > 0 ? `${message} Flow showed: ${diagnostics.join(', ')}.` : message)
+    this.name = 'FlowUiError'
+    this.diagnostics = diagnostics
+  }
+}
+
+export class FlowSignedOutError extends Error {
+  constructor() {
+    super('That profile is not signed in to Google Flow. Connect a Google account for it in Settings, then try again.')
+    this.name = 'FlowSignedOutError'
+  }
+}
+
+export interface FlowRunOptions {
+  context: BrowserContext
+  params: GenerationParams
+  prompt: string
+  generationId: string
+  outputDirectory: string
+  report: (stage: string, progress: number) => void
+  throwIfCancelled: () => void
+}
+
+export interface FlowRunResult {
+  outputs: GenerationOutput[]
+  creditsUsed?: number
+}
+
+/** How long to wait for Flow to finish rendering before giving up. */
+const GENERATION_TIMEOUT_MS = 12 * 60_000
+const POLL_MS = 3000
+
+/**
+ * Drives Flow's web UI inside the account's signed-in browser profile.
+ *
+ * Every control is addressed by its visible label rather than by class name:
+ * Flow ships hashed CSS classes that change on every deploy, but the text on
+ * its buttons ("Video", "10s", "16:9") is the product surface and moves far
+ * less. When a label does go missing, we fail with the labels that *were*
+ * present so the mapping can be corrected instead of guessed at.
+ */
+export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRunResult> {
+  const { context, params, prompt, generationId, outputDirectory, report, throwIfCancelled } = options
+
+  report('Opening Google Flow', 0.08)
+  const page = await context.newPage()
+
+  try {
+    await page.goto(FLOW_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+    await assertSignedIn(page)
+    throwIfCancelled()
+
+    report('Setting up the shot', 0.18)
+    await selectMode(page, params)
+    await selectAspectRatio(page, params)
+    await selectModel(page, params)
+
+    if (params.mode === 'video') {
+      await selectDuration(page, params)
+    }
+    await selectOutputCount(page, params)
+    throwIfCancelled()
+
+    report('Writing the prompt', 0.3)
+    await fillPrompt(page, prompt)
+
+    const creditsUsed = await readQuotedCredits(page)
+    throwIfCancelled()
+
+    report('Submitting to Flow', 0.36)
+    await submit(page)
+
+    report('Flow is generating', 0.45)
+    const mediaUrls = await waitForResults(page, params, { throwIfCancelled, report })
+
+    report('Downloading results', 0.85)
+    const outputs = await downloadResults({ page, mediaUrls, generationId, outputDirectory, params })
+
+    return creditsUsed === undefined ? { outputs } : { outputs, creditsUsed }
+  } finally {
+    await page.close().catch(() => undefined)
+  }
+}
+
+async function assertSignedIn(page: Page): Promise<void> {
+  // Flow bounces anonymous visitors to a Google sign-in or a marketing page.
+  const url = page.url()
+  if (url.includes('accounts.google.com') || url.includes('/signin')) {
+    throw new FlowSignedOutError()
+  }
+
+  const signInButton = page.getByRole('button', { name: /^(sign in|get started)$/i }).first()
+  if (await signInButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new FlowSignedOutError()
+  }
+}
+
+/** Clicks a control identified by its exact visible label. */
+async function clickLabel(page: Page, label: string, what: string): Promise<void> {
+  const target = page.getByRole('button', { name: label, exact: true }).first()
+
+  if (await target.isVisible({ timeout: 8000 }).catch(() => false)) {
+    await target.click()
+    return
+  }
+
+  // Not every Flow control is a <button>; fall back to any element carrying the
+  // label before declaring the mapping broken.
+  const loose = page.getByText(label, { exact: true }).first()
+  if (await loose.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await loose.click()
+    return
+  }
+
+  throw new FlowUiError(`Couldn't find the ${what} control labelled "${label}".`, await visibleControlLabels(page))
+}
+
+async function selectMode(page: Page, params: GenerationParams): Promise<void> {
+  await clickLabel(page, params.mode === 'video' ? 'Video' : 'Image', 'output type')
+
+  if (params.mode === 'video') {
+    await clickLabel(page, params.inputMode === 'frames' ? 'Frames' : 'Ingredients', 'reference')
+  }
+}
+
+async function selectAspectRatio(page: Page, params: GenerationParams): Promise<void> {
+  await clickLabel(page, params.aspectRatio, 'aspect ratio')
+}
+
+async function selectDuration(page: Page, params: GenerationParams): Promise<void> {
+  await clickLabel(page, `${params.durationSeconds}s`, 'duration')
+}
+
+async function selectOutputCount(page: Page, params: GenerationParams): Promise<void> {
+  await clickLabel(page, `x${params.outputCount}`, 'output count')
+}
+
+/**
+ * Opens Flow's model dropdown and picks by visible name. A missing model is the
+ * most likely thing to drift, so the error lists what Flow currently offers.
+ */
+async function selectModel(page: Page, params: GenerationParams): Promise<void> {
+  const trigger = page.getByRole('combobox').first()
+
+  if (await trigger.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await trigger.click()
+  } else {
+    const fallback = page.getByRole('button', { name: new RegExp(escapeRegExp(params.model), 'i') }).first()
+    if (!(await fallback.isVisible({ timeout: 3000 }).catch(() => false))) {
+      throw new FlowUiError("Couldn't find Flow's model picker.", await visibleControlLabels(page))
+    }
+    await fallback.click()
+  }
+
+  const option = page.getByRole('option', { name: params.model, exact: true }).first()
+  if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await option.click()
+    return
+  }
+
+  const offered = await page
+    .getByRole('option')
+    .allTextContents()
+    .catch(() => [])
+
+  throw new FlowUiError(
+    `Flow does not offer a model called "${params.model}". Update the model list in Settings.`,
+    offered.map((text) => text.trim()).filter(Boolean)
+  )
+}
+
+async function fillPrompt(page: Page, prompt: string): Promise<void> {
+  const box = page.getByRole('textbox').first()
+  if (!(await box.isVisible({ timeout: 8000 }).catch(() => false))) {
+    throw new FlowUiError("Couldn't find Flow's prompt box.", await visibleControlLabels(page))
+  }
+  await box.click()
+  await box.fill(prompt)
+}
+
+/** Reads Flow's own "Generating will use N credits" quote, if it is shown. */
+async function readQuotedCredits(page: Page): Promise<number | undefined> {
+  const quote = page.getByText(/will use\s+\d+\s+credits?/i).first()
+  const text = await quote.textContent({ timeout: 3000 }).catch(() => null)
+  if (!text) return undefined
+
+  const match = /(\d+)\s+credits?/i.exec(text)
+  return match?.[1] ? Number(match[1]) : undefined
+}
+
+async function submit(page: Page): Promise<void> {
+  const button = page.getByRole('button', { name: /^generate/i }).first()
+  if (!(await button.isVisible({ timeout: 8000 }).catch(() => false))) {
+    throw new FlowUiError("Couldn't find Flow's Generate button.", await visibleControlLabels(page))
+  }
+  await button.click()
+}
+
+/**
+ * Waits for Flow to produce media. Flow renders results into the page as
+ * `<video>` or `<img>` elements, so we watch for sources that were not present
+ * when we submitted.
+ */
+async function waitForResults(
+  page: Page,
+  params: GenerationParams,
+  hooks: { throwIfCancelled: () => void; report: (stage: string, progress: number) => void }
+): Promise<string[]> {
+  const selector = params.mode === 'video' ? 'video[src]' : 'img[src*="blob"], img[src*="googleusercontent"]'
+  const deadline = Date.now() + GENERATION_TIMEOUT_MS
+
+  while (Date.now() < deadline) {
+    hooks.throwIfCancelled()
+
+    const sources = await page
+      .locator(selector)
+      // Structural casts: the main process has no DOM lib, but these callbacks
+      // run in the page.
+      .evaluateAll((nodes) =>
+        nodes
+          .map((node) => (node as unknown as { src?: string }).src)
+          .filter((src): src is string => typeof src === 'string' && src.length > 0)
+      )
+      .catch(() => [] as string[])
+
+    const unique = [...new Set(sources)]
+    if (unique.length >= params.outputCount) {
+      return unique.slice(0, params.outputCount)
+    }
+
+    const elapsed = GENERATION_TIMEOUT_MS - (deadline - Date.now())
+    hooks.report(
+      unique.length > 0 ? `Flow returned ${unique.length} of ${params.outputCount}` : 'Flow is generating',
+      Math.min(0.8, 0.45 + (elapsed / GENERATION_TIMEOUT_MS) * 0.35)
+    )
+
+    await page.waitForTimeout(POLL_MS)
+  }
+
+  throw new FlowUiError('Flow did not return a result within 12 minutes.')
+}
+
+/**
+ * Pulls each result into the project's output folder. Fetching from inside the
+ * page reuses the session's cookies, which signed URLs require.
+ */
+async function downloadResults(args: {
+  page: Page
+  mediaUrls: string[]
+  generationId: string
+  outputDirectory: string
+  params: GenerationParams
+}): Promise<GenerationOutput[]> {
+  const { page, mediaUrls, generationId, outputDirectory, params } = args
+  await mkdir(outputDirectory, { recursive: true })
+
+  const extension = params.mode === 'video' ? 'mp4' : 'png'
+  const outputs: GenerationOutput[] = []
+
+  for (const [index, mediaUrl] of mediaUrls.entries()) {
+    const base64 = await page.evaluate(async (source) => {
+      const response = await fetch(source)
+      const buffer = await response.arrayBuffer()
+      const bytes = new Uint8Array(buffer)
+      let binary = ''
+      const CHUNK = 0x8000
+      for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(offset, offset + CHUNK)))
+      }
+      return btoa(binary)
+    }, mediaUrl)
+
+    const suffix = mediaUrls.length > 1 ? `-${index + 1}` : ''
+    const path = join(outputDirectory, `${generationId}${suffix}.${extension}`)
+    await writeFile(path, Buffer.from(base64, 'base64'))
+
+    outputs.push({
+      path,
+      url: toMediaUrl('outputs', path),
+      kind: params.mode
+    })
+  }
+
+  if (outputs.length === 0) {
+    throw new FlowUiError('Flow finished but no media could be downloaded.')
+  }
+
+  return outputs
+}
+
+/**
+ * The visible, clickable labels on the page — the payload that turns "selector
+ * not found" into something actionable.
+ */
+async function visibleControlLabels(page: Page): Promise<string[]> {
+  try {
+    const labels = await page.locator('button, [role="button"], [role="option"], [role="tab"]').evaluateAll((nodes) =>
+      nodes
+        .filter((node) => (node as unknown as { offsetParent: unknown }).offsetParent !== null)
+        .map((node) => (node.textContent ?? '').trim())
+        .filter((text) => text.length > 0 && text.length < 40)
+    )
+    return [...new Set(labels)].slice(0, 40)
+  } catch {
+    return []
+  }
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Exposed for the diagnostics command in `ipc.ts`. */
+export async function captureFlowSnapshot(context: BrowserContext): Promise<{ url: string; labels: string[] }> {
+  const page = await context.newPage()
+  try {
+    await page.goto(FLOW_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+    await page.waitForTimeout(4000)
+    return { url: page.url(), labels: await visibleControlLabels(page) }
+  } finally {
+    await page.close().catch(() => undefined)
+  }
+}
+
+export type { Locator }
