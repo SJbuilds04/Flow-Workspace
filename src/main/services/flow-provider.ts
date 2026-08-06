@@ -14,8 +14,14 @@ export const FLOW_URL = 'https://labs.google/fx/tools/flow'
  */
 const LANDING_MARKERS = [/try (in )?google flow/i, /get started/i, /render your sketches/i, /explore tools/i]
 
-/** Anchor text that leads from the landing page into the tool. */
-const ENTRY_LINK_TEXT = /^(try (in )?google flow|get started|open flow|launch)/i
+/**
+ * Controls that lead from the landing page into the tool, best first.
+ *
+ * Deliberately excludes "Get started": on Flow's landing page that one points
+ * at one.google.com/ai — the subscription upsell, not the app. Clicking it
+ * would walk the user into a purchase flow instead of a generation.
+ */
+const ENTRY_CONTROL_TEXT = /^(create with google flow|try (in )?google flow|open flow|start creating|launch flow)/i
 
 /**
  * Raised when Flow's UI does not look the way we expect. Carries a snapshot of
@@ -73,41 +79,45 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
   const { context, params, prompt, generationId, outputDirectory, entryUrl, report, throwIfCancelled } = options
 
   report('Opening Google Flow', 0.08)
-  const page = await context.newPage()
+  const entryPage = await context.newPage()
+  let app: Page = entryPage
 
   try {
-    await openFlowApp(page, context, entryUrl)
+    // Entering the app can hand us a different tab than the one we opened.
+    app = await openFlowApp(entryPage, context, entryUrl)
     throwIfCancelled()
 
     report('Setting up the shot', 0.18)
-    await selectMode(page, params)
-    await selectAspectRatio(page, params)
-    await selectModel(page, params)
+    await selectMode(app, params)
+    await selectAspectRatio(app, params)
+    await selectModel(app, params)
 
     if (params.mode === 'video') {
-      await selectDuration(page, params)
+      await selectDuration(app, params)
     }
-    await selectOutputCount(page, params)
+    await selectOutputCount(app, params)
     throwIfCancelled()
 
     report('Writing the prompt', 0.3)
-    await fillPrompt(page, prompt)
+    await fillPrompt(app, prompt)
 
-    const creditsUsed = await readQuotedCredits(page)
+    const creditsUsed = await readQuotedCredits(app)
     throwIfCancelled()
 
     report('Submitting to Flow', 0.36)
-    await submit(page)
+    await submit(app)
 
     report('Flow is generating', 0.45)
-    const mediaUrls = await waitForResults(page, params, { throwIfCancelled, report })
+    const mediaUrls = await waitForResults(app, params, { throwIfCancelled, report })
 
     report('Downloading results', 0.85)
-    const outputs = await downloadResults({ page, mediaUrls, generationId, outputDirectory, params })
+    const outputs = await downloadResults({ page: app, mediaUrls, generationId, outputDirectory, params })
 
     return creditsUsed === undefined ? { outputs } : { outputs, creditsUsed }
   } finally {
-    await page.close().catch(() => undefined)
+    for (const open of new Set([entryPage, app])) {
+      await open.close().catch(() => undefined)
+    }
   }
 }
 
@@ -119,25 +129,18 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
  * page's own call-to-action — whatever Google points that link at is by
  * definition the current entrance.
  */
-async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string): Promise<void> {
+async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string): Promise<Page> {
   await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
 
   if (page.url().includes('accounts.google.com') || page.url().includes('/signin')) {
     throw new FlowSignedOutError()
   }
 
-  if (!(await isLandingPage(page))) return
+  if (!(await isLandingPage(page))) return page
 
-  const entry = page.getByRole('link', { name: ENTRY_LINK_TEXT }).first()
-  if (await entry.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await Promise.all([
-      page.waitForLoadState('domcontentloaded').catch(() => undefined),
-      entry.click().catch(() => undefined)
-    ])
-    await page.waitForTimeout(4000)
-  }
-
-  if (!(await isLandingPage(page))) return
+  const entered = await clickIntoApp(page, context)
+  const active = entered ?? page
+  if (!(await isLandingPage(active))) return active
 
   // Still on the brochure. Distinguish "not signed in" from "no Flow access",
   // because the fix is completely different.
@@ -148,18 +151,53 @@ async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string
   // "Get started" call-to-action at one.google.com/ai, so the usual cause is
   // that the account has no Google AI subscription tier that includes Flow —
   // which is an entitlement problem, not something a selector can fix.
-  const paywalled = await page
-    .locator('a[href*="one.google.com/ai"]')
-    .first()
-    .isVisible({ timeout: 3000 })
-    .catch(() => false)
+  const onPurchasePage = active.url().includes('one.google.com')
 
   throw new FlowUiError(
-    paywalled
-      ? `Signed in, but Flow is showing its marketing page and offering a Google AI subscription. This account probably does not have Flow access — open ${entryUrl} in a normal browser signed in as this account to confirm. If you do have access, set the Flow URL to the address the app itself loads at.`
-      : `Signed in, but ${entryUrl} is still showing Flow's landing page rather than the app. Run Settings → Diagnose, then set the Flow URL to the address the app actually loads at.`,
-    await visibleControlLabels(page)
+    onPurchasePage
+      ? 'Flow sent this account to the Google AI subscription page, which usually means it has no Flow access on its current plan.'
+      : `Signed in, but couldn't get past Flow's landing page at ${entryUrl}. Open Flow in this profile, go to the screen with the prompt box, and paste that address into Settings → Flow URL.`,
+    await visibleControlLabels(active)
   )
+}
+
+/**
+ * Clicks the landing page's entrance into the tool and returns the page the app
+ * ends up on. The control is sometimes an anchor and sometimes a scripted
+ * button, and it may open a new tab, so all three are handled.
+ */
+async function clickIntoApp(page: Page, context: BrowserContext): Promise<Page | null> {
+  const control = page
+    .getByRole('link', { name: ENTRY_CONTROL_TEXT })
+    .or(page.getByRole('button', { name: ENTRY_CONTROL_TEXT }))
+    .first()
+
+  if (!(await control.isVisible({ timeout: 6000 }).catch(() => false))) return null
+
+  const startingUrl = page.url()
+  const popup = context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+
+  await control.click().catch(() => undefined)
+
+  const opened = await popup
+  const target = opened ?? page
+
+  if (!opened) {
+    // Same-tab navigation: wait for the URL to actually change before judging.
+    await page
+      .waitForFunction(
+        (previous) => (globalThis as unknown as { location: { href: string } }).location.href !== previous,
+        startingUrl,
+        { timeout: 20_000 }
+      )
+      .catch(() => undefined)
+  }
+
+  await target.waitForLoadState('domcontentloaded').catch(() => undefined)
+  // Flow's app shell hydrates well after load; judging too early reads as empty.
+  await target.waitForTimeout(6000)
+
+  return target
 }
 
 async function isLandingPage(page: Page): Promise<boolean> {
@@ -469,12 +507,19 @@ export interface FlowDiagnostics {
  * discovered instead of invented.
  */
 export async function inspectFlow(context: BrowserContext, entryUrl: string): Promise<FlowDiagnostics> {
-  const page = await context.newPage()
+  const entryPage = await context.newPage()
+  let page = entryPage
 
   try {
     await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
     // Flow hydrates late; a snapshot taken immediately is mostly empty.
     await page.waitForTimeout(6000)
+
+    // Follow the entrance the same way a real run would, so the report
+    // describes where generation would actually land.
+    if (await isLandingPage(page)) {
+      page = (await clickIntoApp(page, context)) ?? page
+    }
 
     const candidateAppUrls = await page
       .locator('a[href]')
@@ -496,7 +541,9 @@ export async function inspectFlow(context: BrowserContext, entryUrl: string): Pr
       candidateAppUrls: [...new Set(candidateAppUrls)].slice(0, 30)
     }
   } finally {
-    await page.close().catch(() => undefined)
+    for (const open of new Set([entryPage, page])) {
+      await open.close().catch(() => undefined)
+    }
   }
 }
 
