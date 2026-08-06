@@ -7,6 +7,19 @@
 export type AccountTone = 'green' | 'purple' | 'blue'
 
 /**
+ * The Google account signed into a profile. Everything except `connectedAt` is
+ * best-effort: the session is confirmed from cookies, but the display details
+ * come from an undocumented endpoint and may be absent. A profile with an
+ * identity but no email is still connected — just unlabelled.
+ */
+export interface AccountIdentity {
+  email?: string
+  displayName?: string
+  avatarUrl?: string
+  connectedAt: string
+}
+
+/**
  * An "account" is a named, persistent Playwright browser profile. Switching
  * accounts switches which on-disk browser context generations run through.
  */
@@ -17,9 +30,11 @@ export interface Account {
   /** Directory (inside userData) holding the persistent browser context. */
   profileDirectory: string
   createdAt: string
+  /** Present once a Google account has been signed into this profile. */
+  identity?: AccountIdentity | null
 }
 
-export type ProfileState = 'idle' | 'launching' | 'ready' | 'unavailable'
+export type ProfileState = 'idle' | 'launching' | 'ready' | 'unavailable' | 'signing-in'
 
 export interface ProfileStatus {
   accountId: string

@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Eye, Flame, Gauge } from 'lucide-react'
-import { ASPECT_RATIOS, MODELS, type AspectRatioId, type ModelId } from '@shared/types'
+import { ArrowLeft, Eye, Flame, Gauge, LogIn, LogOut } from 'lucide-react'
+import {
+  ASPECT_RATIOS,
+  MODELS,
+  type Account,
+  type AspectRatioId,
+  type ModelId,
+  type ProfileStatus
+} from '@shared/types'
 import { cn } from '@/lib/cn'
 import { Button } from '@/components/ui/Button'
 import { StatusDot } from '@/components/ui/StatusDot'
@@ -14,8 +21,6 @@ export function SettingsView(): ReactNode {
   const statuses = useWorkspaceStore((state) => state.profileStatuses)
   const updateSettings = useWorkspaceStore((state) => state.updateSettings)
   const setView = useWorkspaceStore((state) => state.setView)
-  const launchProfile = useWorkspaceStore((state) => state.launchProfile)
-  const closeProfile = useWorkspaceStore((state) => state.closeProfile)
 
   if (!settings) return null
 
@@ -74,35 +79,9 @@ export function SettingsView(): ReactNode {
 
         <Section title="Browser profiles" description="Each account runs in its own persistent Playwright context.">
           <div className="divide-y divide-edge-subtle overflow-hidden rounded-2xl border border-edge-subtle">
-            {accounts.map((account) => {
-              const state = statuses[account.id]?.state ?? 'idle'
-              const message = statuses[account.id]?.message
-              return (
-                <div key={account.id} className="flex items-center gap-3 bg-surface-1 px-4 py-3">
-                  <StatusDot tone={account.tone} state={state} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-ink">{account.name}</p>
-                    <p className="truncate text-2xs text-ink-ghost">
-                      {message ?? (state === 'ready' ? 'Running' : state === 'launching' ? 'Starting…' : 'Not running')}
-                    </p>
-                  </div>
-                  {state === 'ready' ? (
-                    <Button variant="ghost" size="sm" onClick={() => void closeProfile(account.id)}>
-                      Stop
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={state === 'launching'}
-                      onClick={() => void launchProfile(account.id)}
-                    >
-                      {state === 'unavailable' ? 'Retry' : 'Start'}
-                    </Button>
-                  )}
-                </div>
-              )
-            })}
+            {accounts.map((account) => (
+              <ProfileRow key={account.id} account={account} status={statuses[account.id]} />
+            ))}
           </div>
 
           <ToggleRow
@@ -132,6 +111,97 @@ export function SettingsView(): ReactNode {
           />
         </Section>
       </motion.div>
+    </div>
+  )
+}
+
+/**
+ * One browser profile: who is signed into it, whether the browser is up, and
+ * the two actions that matter — connect an account, and start/stop the context.
+ */
+function ProfileRow({ account, status }: { account: Account; status?: ProfileStatus }): ReactNode {
+  const launchProfile = useWorkspaceStore((state) => state.launchProfile)
+  const closeProfile = useWorkspaceStore((state) => state.closeProfile)
+  const signInProfile = useWorkspaceStore((state) => state.signInProfile)
+  const cancelSignIn = useWorkspaceStore((state) => state.cancelSignIn)
+  const signOutProfile = useWorkspaceStore((state) => state.signOutProfile)
+
+  const state = status?.state ?? 'idle'
+  const signingIn = state === 'signing-in'
+  const identity = account.identity
+
+  const runLabel =
+    status?.message ?? (state === 'ready' ? 'Browser running' : state === 'launching' ? 'Starting…' : 'Browser idle')
+
+  return (
+    <div className="flex items-start gap-3 bg-surface-1 px-4 py-3.5">
+      {identity?.avatarUrl ? (
+        <img src={identity.avatarUrl} alt="" className="mt-0.5 size-7 shrink-0 rounded-full object-cover" />
+      ) : (
+        <span className="mt-1.5">
+          <StatusDot tone={account.tone} state={state} />
+        </span>
+      )}
+
+      <div className="min-w-0 flex-1">
+        <p className="flex items-center gap-2 truncate text-sm text-ink">
+          {account.name}
+          {identity && (
+            <span className="shrink-0 rounded-md bg-success-soft px-1.5 py-0.5 text-2xs font-medium text-success">
+              Connected
+            </span>
+          )}
+        </p>
+        <p className="mt-0.5 truncate text-2xs text-ink-ghost">
+          {signingIn
+            ? 'Finish signing in with the browser window that opened.'
+            : identity
+              ? (identity.email ?? 'Google account connected')
+              : 'No Google account connected'}
+        </p>
+        {!signingIn && <p className="mt-0.5 truncate text-2xs text-ink-ghost/70">{runLabel}</p>}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {signingIn ? (
+          <Button variant="ghost" size="sm" onClick={() => void cancelSignIn(account.id)}>
+            Cancel
+          </Button>
+        ) : identity ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            iconLeft={<LogOut className="size-3.5" />}
+            onClick={() => void signOutProfile(account.id)}
+          >
+            Sign out
+          </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            iconLeft={<LogIn className="size-3.5" />}
+            onClick={() => void signInProfile(account.id)}
+          >
+            Connect Google
+          </Button>
+        )}
+
+        {state === 'ready' ? (
+          <Button variant="ghost" size="sm" onClick={() => void closeProfile(account.id)}>
+            Stop
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={state === 'launching' || signingIn}
+            onClick={() => void launchProfile(account.id)}
+          >
+            {state === 'unavailable' ? 'Retry' : 'Start'}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

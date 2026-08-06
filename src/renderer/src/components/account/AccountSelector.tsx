@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ChevronDown, Power, RotateCw } from 'lucide-react'
+import { ChevronDown, LogIn, LogOut, Power, RotateCw } from 'lucide-react'
 import type { Account, ProfileState } from '@shared/types'
 import { cn } from '@/lib/cn'
 import { MenuItem, MenuLabel, MenuSeparator } from '@/components/ui/MenuItem'
@@ -11,7 +11,16 @@ const STATE_LABEL: Record<ProfileState, string> = {
   idle: 'Not running',
   launching: 'Starting…',
   ready: 'Browser ready',
-  unavailable: 'Unavailable'
+  unavailable: 'Unavailable',
+  'signing-in': 'Waiting for sign-in…'
+}
+
+/** What to say under an account name: the connected identity wins over run state. */
+function describeAccount(account: Account, state: ProfileState, message?: string): string {
+  if (state === 'signing-in') return STATE_LABEL['signing-in']
+  if (message) return message
+  if (account.identity) return account.identity.email ?? 'Google account connected'
+  return `Not connected · ${STATE_LABEL[state]}`
 }
 
 /**
@@ -26,6 +35,8 @@ export function AccountSelector(): ReactNode {
   const setActiveAccount = useWorkspaceStore((state) => state.setActiveAccount)
   const launchProfile = useWorkspaceStore((state) => state.launchProfile)
   const closeProfile = useWorkspaceStore((state) => state.closeProfile)
+  const signInProfile = useWorkspaceStore((state) => state.signInProfile)
+  const signOutProfile = useWorkspaceStore((state) => state.signOutProfile)
 
   const active: Account | undefined =
     accounts.find((account) => account.id === settings?.activeAccountId) ?? accounts[0]
@@ -37,7 +48,7 @@ export function AccountSelector(): ReactNode {
   return (
     <Popover
       align="end"
-      className="w-[268px]"
+      className="w-[288px]"
       trigger={
         <button
           type="button"
@@ -70,7 +81,7 @@ export function AccountSelector(): ReactNode {
                 key={account.id}
                 icon={<StatusDot tone={account.tone} state={state} />}
                 title={account.name}
-                description={status?.message ?? STATE_LABEL[state]}
+                description={describeAccount(account, state, status?.message)}
                 selected={account.id === active.id}
                 onClick={() => {
                   close()
@@ -81,6 +92,29 @@ export function AccountSelector(): ReactNode {
           })}
 
           <MenuSeparator />
+
+          {active.identity ? (
+            <MenuItem
+              icon={<LogOut className="size-3.5" />}
+              title="Sign out of Google"
+              description={`Clears the session in ${active.name}`}
+              onClick={() => {
+                close()
+                void signOutProfile(active.id)
+              }}
+            />
+          ) : (
+            <MenuItem
+              icon={<LogIn className="size-3.5" />}
+              title="Connect a Google account"
+              description="Opens a browser window to sign in"
+              disabled={activeState === 'signing-in'}
+              onClick={() => {
+                close()
+                void signInProfile(active.id)
+              }}
+            />
+          )}
 
           {activeState === 'ready' ? (
             <MenuItem
@@ -97,7 +131,7 @@ export function AccountSelector(): ReactNode {
               icon={<RotateCw className="size-3.5" />}
               title={activeState === 'unavailable' ? 'Retry launch' : 'Start browser context'}
               description={`Warms up the ${active.name} profile`}
-              disabled={activeState === 'launching'}
+              disabled={activeState === 'launching' || activeState === 'signing-in'}
               onClick={() => {
                 close()
                 void launchProfile(active.id)
