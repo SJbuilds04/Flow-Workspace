@@ -1,0 +1,14 @@
+node_modules/
+out/
+release/
+dist/
+.vite/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+playwright-report/
+test-results/
+.playwright-userdata/
+.env
+.env.local
