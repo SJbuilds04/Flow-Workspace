@@ -77,19 +77,41 @@ test.describe('composer', () => {
     await expect(generate).toBeEnabled()
   })
 
-  test('changes the aspect ratio through the selector', async ({ window }) => {
-    await window.getByRole('button', { name: /^Aspect ratio:/ }).click()
-    await window.getByRole('menuitem', { name: /9:16/ }).click()
-
-    await expect(window.getByRole('button', { name: 'Aspect ratio: 9:16' })).toBeVisible()
+  test('exposes the same controls Flow does', async ({ window }) => {
+    for (const group of ['Output type', 'Reference mode', 'Aspect ratio', 'Duration', 'Outputs']) {
+      await expect(window.getByRole('radiogroup', { name: group })).toBeVisible()
+    }
+    await expect(window.getByRole('button', { name: /^Model:/ })).toBeVisible()
+    await expect(window.getByText(/Generating will use/)).toBeVisible()
   })
 
-  test('changes the model through the selector', async ({ window }) => {
-    await window.getByRole('button', { name: /^Model:/ }).click()
-    await window.getByRole('menuitem', { name: /Flow Image Turbo/ }).click()
+  test('switches aspect ratio, duration and output count', async ({ window }) => {
+    const ratios = window.getByRole('radiogroup', { name: 'Aspect ratio' })
+    await ratios.getByRole('radio', { name: '9:16' }).click()
+    await expect(ratios.getByRole('radio', { name: '9:16' })).toHaveAttribute('aria-checked', 'true')
 
-    await expect(window.getByRole('button', { name: 'Model: Flow Image Turbo' })).toBeVisible()
-    await expect(window.getByRole('textbox', { name: 'Prompt' })).toHaveAttribute('placeholder', /Flow Image Turbo/)
+    const durations = window.getByRole('radiogroup', { name: 'Duration' })
+    await durations.getByRole('radio', { name: '10s' }).click()
+    await expect(durations.getByRole('radio', { name: '10s' })).toHaveAttribute('aria-checked', 'true')
+
+    const outputs = window.getByRole('radiogroup', { name: 'Outputs' })
+    await outputs.getByRole('radio', { name: 'x4' }).click()
+    await expect(outputs.getByRole('radio', { name: 'x4' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  test('hides the video-only controls in image mode', async ({ window }) => {
+    await window.getByRole('radiogroup', { name: 'Output type' }).getByRole('radio', { name: 'Image' }).click()
+
+    await expect(window.getByRole('radiogroup', { name: 'Duration' })).toBeHidden()
+    await expect(window.getByRole('radiogroup', { name: 'Reference mode' })).toBeHidden()
+    await expect(window.getByRole('radiogroup', { name: 'Outputs' })).toBeVisible()
+  })
+
+  test('changes the model through the picker', async ({ window }) => {
+    await window.getByRole('button', { name: 'Model: Omni Flash' }).click()
+    await window.getByRole('menuitem', { name: 'Omni Flash' }).click()
+
+    await expect(window.getByRole('button', { name: 'Model: Omni Flash' })).toBeVisible()
   })
 
   test('shows the empty history state on a fresh project', async ({ window }) => {

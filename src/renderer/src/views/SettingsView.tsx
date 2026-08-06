@@ -1,18 +1,22 @@
 import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Eye, Flame, Gauge, LogIn, LogOut } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowLeft, Eye, Flame, Gauge, LogIn, LogOut, Plus, X } from 'lucide-react'
 import {
-  ASPECT_RATIOS,
-  MODELS,
+  FLOW_ASPECT_RATIOS,
+  VIDEO_DURATIONS,
   type Account,
-  type AspectRatioId,
-  type ModelId,
-  type ProfileStatus
+  type FlowAspectRatio,
+  type GenerationEngineId,
+  type ProfileStatus,
+  type VideoDuration
 } from '@shared/types'
 import { cn } from '@/lib/cn'
 import { Button } from '@/components/ui/Button'
+import { IconButton } from '@/components/ui/IconButton'
 import { StatusDot } from '@/components/ui/StatusDot'
 import { Switch } from '@/components/ui/Switch'
+import { TextField } from '@/components/ui/TextField'
 import { useWorkspaceStore } from '@/store/workspace-store'
 
 export function SettingsView(): ReactNode {
@@ -45,32 +49,76 @@ export function SettingsView(): ReactNode {
         <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">Settings</h1>
         <p className="mt-1.5 text-sm text-ink-faint">Defaults for new generations and how browser profiles behave.</p>
 
-        <Section title="Defaults" description="Applied to every new project and every cleared prompt.">
-          <Field label="Model">
+        <Section
+          title="Generation engine"
+          description="Google Flow drives the real labs.google app in the selected profile. Local preview renders offline and needs no account."
+        >
+          <Field label="Engine">
             <select
-              value={settings.defaultModelId}
-              aria-label="Default model"
-              onChange={(event) => void updateSettings({ defaultModelId: event.target.value as ModelId })}
+              value={settings.engine}
+              aria-label="Generation engine"
+              onChange={(event) => void updateSettings({ engine: event.target.value as GenerationEngineId })}
               className={selectClass}
             >
-              {MODELS.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name}
+              <option value="google-flow">Google Flow</option>
+              <option value="local-preview">Local preview</option>
+            </select>
+          </Field>
+
+          <Field label="Default model">
+            <select
+              value={settings.defaults.model}
+              aria-label="Default model"
+              onChange={(event) =>
+                void updateSettings({ defaults: { ...settings.defaults, model: event.target.value } })
+              }
+              className={selectClass}
+            >
+              {settings.flowModels.map((model) => (
+                <option key={model} value={model}>
+                  {model}
                 </option>
               ))}
             </select>
           </Field>
 
+          <ModelListEditor models={settings.flowModels} />
+        </Section>
+
+        <Section title="Defaults" description="Applied to every new project and every cleared prompt.">
           <Field label="Aspect ratio">
             <select
-              value={settings.defaultAspectRatio}
+              value={settings.defaults.aspectRatio}
               aria-label="Default aspect ratio"
-              onChange={(event) => void updateSettings({ defaultAspectRatio: event.target.value as AspectRatioId })}
+              onChange={(event) =>
+                void updateSettings({
+                  defaults: { ...settings.defaults, aspectRatio: event.target.value as FlowAspectRatio }
+                })
+              }
               className={selectClass}
             >
-              {ASPECT_RATIOS.map((ratio) => (
+              {FLOW_ASPECT_RATIOS.map((ratio) => (
                 <option key={ratio.id} value={ratio.id}>
-                  {ratio.label} — {ratio.description}
+                  {ratio.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Default duration">
+            <select
+              value={settings.defaults.durationSeconds}
+              aria-label="Default duration"
+              onChange={(event) =>
+                void updateSettings({
+                  defaults: { ...settings.defaults, durationSeconds: Number(event.target.value) as VideoDuration }
+                })
+              }
+              className={selectClass}
+            >
+              {VIDEO_DURATIONS.map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {seconds}s
                 </option>
               ))}
             </select>
@@ -111,6 +159,76 @@ export function SettingsView(): ReactNode {
           />
         </Section>
       </motion.div>
+    </div>
+  )
+}
+
+/**
+ * Flow renames and rotates its models, and the automation picks one by the
+ * visible label in Flow's own dropdown. Keeping the list editable means a
+ * rename is a thirty-second fix here rather than a code change — and a run that
+ * fails because the name is gone reports what Flow actually offered.
+ */
+function ModelListEditor({ models }: { models: string[] }): ReactNode {
+  const updateSettings = useWorkspaceStore((state) => state.updateSettings)
+  const [draft, setDraft] = useState('')
+
+  const add = (): void => {
+    const name = draft.trim()
+    if (!name || models.includes(name)) {
+      setDraft('')
+      return
+    }
+    void updateSettings({ flowModels: [...models, name] })
+    setDraft('')
+  }
+
+  const remove = (name: string): void => {
+    if (models.length <= 1) return
+    void updateSettings({ flowModels: models.filter((model) => model !== name) })
+  }
+
+  return (
+    <div className="rounded-2xl border border-edge-subtle bg-surface-1 px-4 py-3.5">
+      <p className="text-sm text-ink">Model names</p>
+      <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+        These must match the labels in Flow&rsquo;s model dropdown exactly.
+      </p>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {models.map((model) => (
+          <span
+            key={model}
+            className="flex items-center gap-1 rounded-lg border border-edge-subtle bg-surface-2 py-1 pl-2.5 pr-1 text-xs text-ink"
+          >
+            {model}
+            <IconButton
+              icon={<X className="size-3" />}
+              label={`Remove ${model}`}
+              size="sm"
+              tooltip={false}
+              disabled={models.length <= 1}
+              onClick={() => remove(model)}
+            />
+          </span>
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-center gap-2">
+        <TextField
+          value={draft}
+          placeholder="Add a model name"
+          aria-label="New model name"
+          containerClassName="flex-1"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') add()
+          }}
+        />
+        <Button variant="secondary" size="sm" iconLeft={<Plus className="size-3.5" />} onClick={add}>
+          Add
+        </Button>
+      </div>
     </div>
   )
 }

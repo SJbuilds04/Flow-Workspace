@@ -1,15 +1,14 @@
-import { useRef, type ReactNode } from 'react'
+﻿import { useRef, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowUp, Film, ImagePlus, Square } from 'lucide-react'
-import { findModel } from '@shared/types'
+import { DEFAULT_FLOW_MODELS } from '@shared/types'
 import { cn } from '@/lib/cn'
 import { useAutoResize } from '@/hooks/useAutoResize'
 import { Button } from '@/components/ui/Button'
 import { Tooltip } from '@/components/ui/Tooltip'
 import { useWorkspaceStore, type ActiveRun, type Draft } from '@/store/workspace-store'
-import { AspectRatioSelector } from './AspectRatioSelector'
 import { AttachmentChip } from './AttachmentChip'
-import { ModelSelector } from './ModelSelector'
+import { FlowControls } from './FlowControls'
 
 interface PromptComposerProps {
   projectId: string
@@ -24,11 +23,11 @@ export function PromptComposer({ projectId, draft, run }: PromptComposerProps): 
   const clearAttachment = useWorkspaceStore((state) => state.clearAttachment)
   const generate = useWorkspaceStore((state) => state.generate)
   const cancelRun = useWorkspaceStore((state) => state.cancelRun)
+  const models = useWorkspaceStore((state) => state.settings?.flowModels ?? [...DEFAULT_FLOW_MODELS])
 
   useAutoResize(textareaRef, draft.prompt)
 
   const busy = Boolean(run)
-  const model = findModel(draft.modelId)
   const canGenerate = draft.prompt.trim().length > 0 && !busy
   const hasAttachments = Boolean(draft.referenceImage || draft.referenceVideo)
 
@@ -81,7 +80,11 @@ export function PromptComposer({ projectId, draft, run }: PromptComposerProps): 
         disabled={busy}
         rows={1}
         aria-label="Prompt"
-        placeholder={`Describe what you want to create with ${model.name}…`}
+        placeholder={
+          draft.mode === 'video'
+            ? `Describe the ${draft.durationSeconds}s shot you want…`
+            : 'Describe the image you want…'
+        }
         onChange={(event) => patchDraft(projectId, { prompt: event.target.value })}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -106,13 +109,12 @@ export function PromptComposer({ projectId, draft, run }: PromptComposerProps): 
               aria-label="Add reference image"
               onClick={() => void pickAttachment(projectId, 'image')}
               className={cn(
-                'flex h-8 items-center gap-2 rounded-xl px-2.5 text-xs transition-all duration-200 ease-flow',
+                'flex size-8 items-center justify-center rounded-xl transition-all duration-200 ease-flow',
                 'hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40',
                 draft.referenceImage ? 'text-accent' : 'text-ink-muted'
               )}
             >
-              <ImagePlus className="size-3.5 shrink-0" aria-hidden />
-              <span className="font-medium">Image</span>
+              <ImagePlus className="size-4 shrink-0" aria-hidden />
             </button>
           </Tooltip>
 
@@ -123,28 +125,14 @@ export function PromptComposer({ projectId, draft, run }: PromptComposerProps): 
               aria-label="Add reference video"
               onClick={() => void pickAttachment(projectId, 'video')}
               className={cn(
-                'flex h-8 items-center gap-2 rounded-xl px-2.5 text-xs transition-all duration-200 ease-flow',
+                'flex size-8 items-center justify-center rounded-xl transition-all duration-200 ease-flow',
                 'hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40',
                 draft.referenceVideo ? 'text-accent' : 'text-ink-muted'
               )}
             >
-              <Film className="size-3.5 shrink-0" aria-hidden />
-              <span className="font-medium">Video</span>
+              <Film className="size-4 shrink-0" aria-hidden />
             </button>
           </Tooltip>
-
-          <span className="mx-1 h-4 w-px shrink-0 bg-edge-subtle" aria-hidden />
-
-          <AspectRatioSelector
-            value={draft.aspectRatio}
-            disabled={busy}
-            onChange={(aspectRatio) => patchDraft(projectId, { aspectRatio })}
-          />
-          <ModelSelector
-            value={draft.modelId}
-            disabled={busy}
-            onChange={(modelId) => patchDraft(projectId, { modelId })}
-          />
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
@@ -183,6 +171,8 @@ export function PromptComposer({ projectId, draft, run }: PromptComposerProps): 
           )}
         </div>
       </div>
+
+      <FlowControls params={draft} models={models} disabled={busy} onChange={(patch) => patchDraft(projectId, patch)} />
 
       <AnimatePresence>
         {run && (

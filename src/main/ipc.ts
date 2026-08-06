@@ -214,7 +214,7 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
       (attachment): attachment is AttachmentRef => Boolean(attachment)
     )
 
-    const generation = await engine.run({ request, account, attachments })
+    const generation = await engine.run({ request, account, attachments, engine: store.settings.engine })
 
     await store.upsertGeneration(generation)
     broadcast(IpcChannels.eventGenerationSettled, generation)
@@ -296,12 +296,19 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
 }
 
 async function removeGenerationFiles(generation: Generation): Promise<void> {
-  const targets = [generation.outputPath, generation.thumbnailUrl ? fromMediaUrl(generation.thumbnailUrl) : null]
-  await Promise.all(
-    targets
-      .filter((target): target is string => Boolean(target))
-      .map((target) => rm(target, { force: true }).catch(() => undefined))
-  )
+  // A run can produce up to four artifacts plus their poster frames; deleting
+  // only the first would leave the rest orphaned on disk.
+  const targets = [
+    ...generation.outputs.flatMap((output) => [
+      output.path,
+      output.thumbnailUrl ? fromMediaUrl(output.thumbnailUrl) : null
+    ]),
+    generation.outputPath ?? null,
+    generation.thumbnailUrl ? fromMediaUrl(generation.thumbnailUrl) : null
+  ]
+
+  const unique = [...new Set(targets.filter((target): target is string => Boolean(target)))]
+  await Promise.all(unique.map((target) => rm(target, { force: true }).catch(() => undefined)))
 }
 
 function slugify(input: string): string {

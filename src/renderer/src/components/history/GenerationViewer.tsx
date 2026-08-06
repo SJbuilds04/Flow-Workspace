@@ -2,7 +2,7 @@ import { useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Download, FolderOpen, X } from 'lucide-react'
-import { findAspectRatio, findModel, type Generation } from '@shared/types'
+import { findFlowAspect, type Generation } from '@shared/types'
 import { formatDateTime, formatDuration } from '@/lib/format'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -25,8 +25,7 @@ export function GenerationViewer({ generation, onClose, onDownload, onReveal }: 
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [generation, onClose])
 
-  const model = generation ? findModel(generation.modelId) : null
-  const ratio = generation ? findAspectRatio(generation.aspectRatio) : null
+  const ratio = generation ? findFlowAspect(generation.aspectRatio) : null
 
   return createPortal(
     <AnimatePresence>
@@ -54,7 +53,7 @@ export function GenerationViewer({ generation, onClose, onDownload, onReveal }: 
             className="relative z-10 flex items-center justify-between gap-4 px-6 py-4"
           >
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-white">{model?.name}</p>
+              <p className="truncate text-sm font-medium text-white">{generation.model}</p>
               <p className="truncate text-2xs text-white/45">
                 {ratio?.label} · {formatDateTime(generation.createdAt)}
                 {generation.durationMs ? ` · ${formatDuration(generation.durationMs)}` : ''}
@@ -89,7 +88,7 @@ export function GenerationViewer({ generation, onClose, onDownload, onReveal }: 
             transition={{ type: 'spring', stiffness: 320, damping: 34 }}
             className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-6 pb-4"
           >
-            {model?.kind === 'video' ? (
+            {generation.mode === 'video' ? (
               <video
                 key={generation.outputUrl}
                 src={generation.outputUrl}
