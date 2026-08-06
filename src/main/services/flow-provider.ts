@@ -144,9 +144,20 @@ async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string
   const signedIn = await hasGoogleSession(context)
   if (!signedIn) throw new FlowSignedOutError()
 
+  // Signed in and still on the brochure. Flow's landing page points its
+  // "Get started" call-to-action at one.google.com/ai, so the usual cause is
+  // that the account has no Google AI subscription tier that includes Flow —
+  // which is an entitlement problem, not something a selector can fix.
+  const paywalled = await page
+    .locator('a[href*="one.google.com/ai"]')
+    .first()
+    .isVisible({ timeout: 3000 })
+    .catch(() => false)
+
   throw new FlowUiError(
-    `Signed in, but ${entryUrl} is still showing Flow's landing page rather than the app. ` +
-      'Open Flow manually in this profile once (Settings → Diagnose Flow), then set the Flow URL to the address the app actually loads at.',
+    paywalled
+      ? `Signed in, but Flow is showing its marketing page and offering a Google AI subscription. This account probably does not have Flow access — open ${entryUrl} in a normal browser signed in as this account to confirm. If you do have access, set the Flow URL to the address the app itself loads at.`
+      : `Signed in, but ${entryUrl} is still showing Flow's landing page rather than the app. Run Settings → Diagnose, then set the Flow URL to the address the app actually loads at.`,
     await visibleControlLabels(page)
   )
 }
