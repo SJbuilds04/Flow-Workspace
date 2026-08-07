@@ -237,7 +237,12 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
       account,
       attachments,
       engine: store.settings.engine,
-      flowUrl: store.settings.flowUrl
+      flowUrl: store.settings.flowUrl,
+      onProjectResolved: (projectUrl) => {
+        void store.setAccountFlowProject(account.id, projectUrl).then((updated) => {
+          if (updated) broadcast(IpcChannels.eventAccountUpdated, updated)
+        })
+      }
     })
 
     await store.upsertGeneration(generation)

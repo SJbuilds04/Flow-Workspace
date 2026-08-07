@@ -37,6 +37,8 @@ interface RunOptions {
   attachments: AttachmentRef[]
   engine: GenerationEngineId
   flowUrl: string
+  /** Called when a run settles on a Flow project worth reusing next time. */
+  onProjectResolved?: (projectUrl: string) => void
 }
 
 interface ActiveRun {
@@ -69,7 +71,7 @@ export class GenerationEngine extends EventEmitter {
     return true
   }
 
-  async run({ request, account, attachments, engine, flowUrl }: RunOptions): Promise<Generation> {
+  async run({ request, account, attachments, engine, flowUrl, onProjectResolved }: RunOptions): Promise<Generation> {
     const params = normaliseParams(request)
     const startedAt = Date.now()
 
@@ -124,11 +126,15 @@ export class GenerationEngine extends EventEmitter {
           generationId: generation.id,
           outputDirectory,
           entryUrl: flowUrl,
+          projectUrl: account.flowProjectUrl ?? null,
           report,
           throwIfCancelled
         })
         generation.outputs = result.outputs
         if (result.creditsUsed !== undefined) generation.creditsUsed = result.creditsUsed
+        if (result.projectUrl && result.projectUrl !== account.flowProjectUrl) {
+          onProjectResolved?.(result.projectUrl)
+        }
       } else {
         generation.outputs = await this.renderLocally({
           context,

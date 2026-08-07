@@ -32,6 +32,13 @@ export interface Account {
   createdAt: string
   /** Present once a Google account has been signed into this profile. */
   identity?: AccountIdentity | null
+  /**
+   * The Flow project this profile generates into. Remembered after the first
+   * run so later ones skip the landing page, the consent flow and project
+   * creation — and so the account does not collect a new Flow project per
+   * generation.
+   */
+  flowProjectUrl?: string | null
 }
 
 export type ProfileState = 'idle' | 'launching' | 'ready' | 'unavailable' | 'signing-in'
