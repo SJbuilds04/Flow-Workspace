@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { BrowserContext, Locator, Page } from 'playwright-core'
+import type { BrowserContext, Page } from 'playwright-core'
 import type { GenerationOutput, GenerationParams } from '@shared/types'
 import { hasGoogleSession } from './google-session'
 import { toMediaUrl } from './media-url'
@@ -8,26 +8,20 @@ import { toMediaUrl } from './media-url'
 export const FLOW_URL = 'https://labs.google/fx/tools/flow'
 
 /**
- * Copy that only appears on Flow's public landing page. Hitting these means we
- * are on the brochure, not the tool — either the account has no Flow access, or
- * the entry URL needs to be the app itself.
+ * Copy that only appears on Flow's public landing page, before you enter the
+ * tool proper.
  */
-const LANDING_MARKERS = [/try (in )?google flow/i, /get started/i, /render your sketches/i, /explore tools/i]
+const LANDING_MARKERS = [/render your sketches/i, /explore tools in google flow/i, /unlock your best creative work/i]
 
-/**
- * Controls that lead from the landing page into the tool, best first.
- *
- * Deliberately excludes "Get started": on Flow's landing page that one points
- * at one.google.com/ai — the subscription upsell, not the app. Clicking it
- * would walk the user into a purchase flow instead of a generation.
- */
-const ENTRY_CONTROL_TEXT = /^(create with google flow|try (in )?google flow|open flow|start creating|launch flow)/i
+/** The landing page's real entrance. NOT "Get started" — that goes to billing. */
+const ENTRY_CONTROL_TEXT = /create with google flow|try in google flow/i
 
-/**
- * Raised when Flow's UI does not look the way we expect. Carries a snapshot of
- * what *was* on the page, because a selector that stopped matching is only
- * fixable if you can see what replaced it.
- */
+/** Buttons that advance Flow's first-run consent and privacy dialogs. */
+const CONSENT_ADVANCE = ['Continue', 'Next', 'I agree', 'Accept all', 'Accept', 'Got it', 'Done', 'Start']
+
+const GENERATION_TIMEOUT_MS = 12 * 60_000
+const POLL_MS = 6000
+
 export class FlowUiError extends Error {
   readonly diagnostics: string[]
 
@@ -51,7 +45,6 @@ export interface FlowRunOptions {
   prompt: string
   generationId: string
   outputDirectory: string
-  /** Where to start; configurable because Google moves the tool's entrance. */
   entryUrl: string
   report: (stage: string, progress: number) => void
   throwIfCancelled: () => void
@@ -62,306 +55,279 @@ export interface FlowRunResult {
   creditsUsed?: number
 }
 
-/** How long to wait for Flow to finish rendering before giving up. */
-const GENERATION_TIMEOUT_MS = 12 * 60_000
-const POLL_MS = 3000
-
 /**
- * Drives Flow's web UI inside the account's signed-in browser profile.
+ * Drives Flow's web app inside the account's signed-in browser profile.
  *
- * Every control is addressed by its visible label rather than by class name:
- * Flow ships hashed CSS classes that change on every deploy, but the text on
- * its buttons ("Video", "10s", "16:9") is the product surface and moves far
- * less. When a label does go missing, we fail with the labels that *were*
- * present so the mapping can be corrected instead of guessed at.
+ * The sequence was derived by walking the real product, and each step exists
+ * because Flow blocks on it: the landing page hides the tool behind a button,
+ * first-run consent gates its own dismissal behind scrolling to the end, the
+ * generation surface only exists inside a project, and the agent asks for
+ * confirmation before spending credits unless told not to.
+ *
+ * Controls are matched by *substring*, never by exact accessible name: Flow
+ * renders Material Symbols as text inside its buttons, so the accessible name
+ * of the 16:9 control is literally "crop_16_916:9".
  */
 export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRunResult> {
   const { context, params, prompt, generationId, outputDirectory, entryUrl, report, throwIfCancelled } = options
 
-  report('Opening Google Flow', 0.08)
-  const entryPage = await context.newPage()
-  let app: Page = entryPage
+  report('Opening Google Flow', 0.06)
+  const page = await context.newPage()
 
   try {
-    // Entering the app can hand us a different tab than the one we opened.
-    app = await openFlowApp(entryPage, context, entryUrl)
+    await openFlowApp(page, context, entryUrl)
     throwIfCancelled()
 
-    report('Setting up the shot', 0.18)
-    await selectMode(app, params)
-    await selectAspectRatio(app, params)
-    await selectModel(app, params)
-
-    if (params.mode === 'video') {
-      await selectDuration(app, params)
-    }
-    await selectOutputCount(app, params)
+    report('Clearing first-run dialogs', 0.14)
+    await dismissConsent(page)
     throwIfCancelled()
 
-    report('Writing the prompt', 0.3)
-    await fillPrompt(app, prompt)
-
-    const creditsUsed = await readQuotedCredits(app)
+    report('Opening a Flow project', 0.2)
+    await ensureProject(page)
     throwIfCancelled()
 
-    report('Submitting to Flow', 0.36)
-    await submit(app)
+    report('Applying generation settings', 0.28)
+    await applyAgentSettings(page, params)
+    throwIfCancelled()
 
-    report('Flow is generating', 0.45)
-    const mediaUrls = await waitForResults(app, params, { throwIfCancelled, report })
+    report('Writing the prompt', 0.34)
+    await submitPrompt(page, prompt, params)
+    throwIfCancelled()
 
-    report('Downloading results', 0.85)
-    const outputs = await downloadResults({ page: app, mediaUrls, generationId, outputDirectory, params })
+    report('Flow is generating', 0.42)
+    const mediaUrls = await waitForResults(page, params, { throwIfCancelled, report })
 
-    return creditsUsed === undefined ? { outputs } : { outputs, creditsUsed }
+    report('Downloading results', 0.88)
+    const outputs = await downloadResults({ page, mediaUrls, generationId, outputDirectory, params })
+
+    return { outputs }
   } finally {
-    for (const open of new Set([entryPage, app])) {
-      await open.close().catch(() => undefined)
-    }
+    await page.close().catch(() => undefined)
   }
 }
 
-/**
- * Gets from the configured entry URL to the actual generation surface.
- *
- * `labs.google/fx/tools/flow` serves a marketing page, and the tool lives
- * behind it. Rather than hardcode a guess at the app URL, follow the landing
- * page's own call-to-action — whatever Google points that link at is by
- * definition the current entrance.
- */
-async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string): Promise<Page> {
+/** Any clickable carrying this text, whatever element Flow built it from. */
+function clickable(page: Page, text: RegExp) {
+  return page.locator('button, [role="button"], a, [role="menuitem"], [role="radio"]').filter({ hasText: text })
+}
+
+async function openFlowApp(page: Page, context: BrowserContext, entryUrl: string): Promise<void> {
   await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+  await page.waitForTimeout(6000)
 
   if (page.url().includes('accounts.google.com') || page.url().includes('/signin')) {
     throw new FlowSignedOutError()
   }
 
-  if (!(await isLandingPage(page))) return page
+  if (!(await isLandingPage(page))) return
 
-  const entered = await clickIntoApp(page, context)
-  const active = entered ?? page
-  if (!(await isLandingPage(active))) return active
-
-  // Still on the brochure. Distinguish "not signed in" from "no Flow access",
-  // because the fix is completely different.
-  const signedIn = await hasGoogleSession(context)
-  if (!signedIn) throw new FlowSignedOutError()
-
-  // Signed in and still on the brochure. Flow's landing page points its
-  // "Get started" call-to-action at one.google.com/ai, so the usual cause is
-  // that the account has no Google AI subscription tier that includes Flow —
-  // which is an entitlement problem, not something a selector can fix.
-  const onPurchasePage = active.url().includes('one.google.com')
-
-  throw new FlowUiError(
-    onPurchasePage
-      ? 'Flow sent this account to the Google AI subscription page, which usually means it has no Flow access on its current plan.'
-      : `Signed in, but couldn't get past Flow's landing page at ${entryUrl}. Open Flow in this profile, go to the screen with the prompt box, and paste that address into Settings → Flow URL.`,
-    await visibleControlLabels(active)
-  )
-}
-
-/**
- * Clicks the landing page's entrance into the tool and returns the page the app
- * ends up on. The control is sometimes an anchor and sometimes a scripted
- * button, and it may open a new tab, so all three are handled.
- */
-async function clickIntoApp(page: Page, context: BrowserContext): Promise<Page | null> {
-  const control = page
-    .getByRole('link', { name: ENTRY_CONTROL_TEXT })
-    .or(page.getByRole('button', { name: ENTRY_CONTROL_TEXT }))
-    .first()
-
-  if (!(await control.isVisible({ timeout: 6000 }).catch(() => false))) return null
-
-  const startingUrl = page.url()
-  const popup = context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
-
-  await control.click().catch(() => undefined)
-
-  const opened = await popup
-  const target = opened ?? page
-
-  if (!opened) {
-    // Same-tab navigation: wait for the URL to actually change before judging.
-    await page
-      .waitForFunction(
-        (previous) => (globalThis as unknown as { location: { href: string } }).location.href !== previous,
-        startingUrl,
-        { timeout: 20_000 }
-      )
-      .catch(() => undefined)
+  const entrance = clickable(page, ENTRY_CONTROL_TEXT).first()
+  if (await entrance.isVisible({ timeout: 6000 }).catch(() => false)) {
+    await entrance.click({ timeout: 10_000 }).catch(() => undefined)
+    await page.waitForTimeout(7000)
   }
 
-  await target.waitForLoadState('domcontentloaded').catch(() => undefined)
-  // Flow's app shell hydrates well after load; judging too early reads as empty.
-  await target.waitForTimeout(6000)
+  if (!(await isLandingPage(page))) return
 
-  return target
+  if (!(await hasGoogleSession(context))) throw new FlowSignedOutError()
+
+  throw new FlowUiError(
+    `Signed in, but couldn't get past Flow's landing page at ${entryUrl}.`,
+    await visibleControlLabels(page)
+  )
 }
 
 async function isLandingPage(page: Page): Promise<boolean> {
   const text = await page
     .locator('body')
-    .innerText({ timeout: 5000 })
+    .innerText({ timeout: 6000 })
     .catch(() => '')
   return LANDING_MARKERS.some((marker) => marker.test(text))
 }
 
-/** Clicks a control identified by its exact visible label. */
-async function clickLabel(page: Page, label: string, what: string): Promise<void> {
-  const target = page.getByRole('button', { name: label, exact: true }).first()
+/**
+ * Walks Flow's first-run consent flow. The privacy notice keeps its Continue
+ * button disabled until the copy has been scrolled to the end, so every
+ * scrollable container is driven to the bottom before each attempt.
+ */
+async function dismissConsent(page: Page): Promise<void> {
+  for (let round = 0; round < 8; round += 1) {
+    await page
+      .evaluate(() => {
+        // Runs in the page; the main process has no DOM lib to type it with.
+        type Scrollable = { scrollHeight: number; clientHeight: number; scrollTop: number }
+        const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): Iterable<Scrollable> } })
+          .document
+        for (const element of doc.querySelectorAll('*')) {
+          if (element.scrollHeight > element.clientHeight + 40) element.scrollTop = element.scrollHeight
+        }
+      })
+      .catch(() => undefined)
+    await page.waitForTimeout(700)
 
-  if (await target.isVisible({ timeout: 8000 }).catch(() => false)) {
-    await target.click()
-    return
+    let advanced = false
+    for (const label of CONSENT_ADVANCE) {
+      const button = page.getByRole('button', { name: label, exact: true }).first()
+      if (!(await button.isVisible({ timeout: 800 }).catch(() => false))) continue
+      if (!(await button.isEnabled().catch(() => false))) continue
+
+      await button.click({ timeout: 8000 }).catch(() => undefined)
+      advanced = true
+      break
+    }
+
+    if (!advanced) return
+    await page.waitForTimeout(3000)
   }
-
-  // Not every Flow control is a <button>; fall back to any element carrying the
-  // label before declaring the mapping broken.
-  const loose = page.getByText(label, { exact: true }).first()
-  if (await loose.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await loose.click()
-    return
-  }
-
-  throw new FlowUiError(`Couldn't find the ${what} control labelled "${label}".`, await visibleControlLabels(page))
-}
-
-async function selectMode(page: Page, params: GenerationParams): Promise<void> {
-  await clickLabel(page, params.mode === 'video' ? 'Video' : 'Image', 'output type')
-
-  if (params.mode === 'video') {
-    await clickLabel(page, params.inputMode === 'frames' ? 'Frames' : 'Ingredients', 'reference')
-  }
-}
-
-async function selectAspectRatio(page: Page, params: GenerationParams): Promise<void> {
-  await clickLabel(page, params.aspectRatio, 'aspect ratio')
-}
-
-async function selectDuration(page: Page, params: GenerationParams): Promise<void> {
-  await clickLabel(page, `${params.durationSeconds}s`, 'duration')
-}
-
-async function selectOutputCount(page: Page, params: GenerationParams): Promise<void> {
-  await clickLabel(page, `x${params.outputCount}`, 'output count')
 }
 
 /**
- * Opens Flow's model dropdown and picks by visible name. A missing model is the
- * most likely thing to drift, so the error lists what Flow currently offers.
+ * The prompt box only exists inside a project, so open the current one or make
+ * a new one.
  */
-async function selectModel(page: Page, params: GenerationParams): Promise<void> {
-  const trigger = page.getByRole('combobox').first()
+async function ensureProject(page: Page): Promise<void> {
+  if (page.url().includes('/project/')) return
 
-  if (await trigger.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await trigger.click()
-  } else {
-    const fallback = page.getByRole('button', { name: new RegExp(escapeRegExp(params.model), 'i') }).first()
-    if (!(await fallback.isVisible({ timeout: 3000 }).catch(() => false))) {
-      throw new FlowUiError("Couldn't find Flow's model picker.", await visibleControlLabels(page))
-    }
-    await fallback.click()
+  const newProject = page.getByRole('button', { name: /new project/i }).first()
+  if (await newProject.isVisible({ timeout: 8000 }).catch(() => false)) {
+    await newProject.click({ timeout: 12_000 }).catch(() => undefined)
+    await page.waitForURL(/\/project\//, { timeout: 45_000 }).catch(() => undefined)
+    await page.waitForTimeout(8000)
   }
 
-  const option = page.getByRole('option', { name: params.model, exact: true }).first()
-  if (await option.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await option.click()
-    return
+  if (!page.url().includes('/project/')) {
+    throw new FlowUiError("Couldn't open a Flow project.", await visibleControlLabels(page))
   }
-
-  const offered = await page
-    .getByRole('option')
-    .allTextContents()
-    .catch(() => [])
-
-  throw new FlowUiError(
-    `Flow does not offer a model called "${params.model}". Update the model list in Settings.`,
-    offered.map((text) => text.trim()).filter(Boolean)
-  )
 }
 
-async function fillPrompt(page: Page, prompt: string): Promise<void> {
-  const box = page.getByRole('textbox').first()
-  if (!(await box.isVisible({ timeout: 8000 }).catch(() => false))) {
+/**
+ * Sets the agent to generate without asking, plus the ratio and output count.
+ * Failing to apply a preference is not fatal — Flow's defaults still generate,
+ * and a stopped run helps nobody.
+ */
+async function applyAgentSettings(page: Page, params: GenerationParams): Promise<void> {
+  const tune = page.getByRole('button', { name: /tune|settings/i }).last()
+  if (!(await tune.isVisible({ timeout: 6000 }).catch(() => false))) return
+
+  await tune.click({ timeout: 8000 }).catch(() => undefined)
+  await page.waitForTimeout(3000)
+
+  // Without this the agent stops and waits for a human to confirm the spend.
+  const never = clickable(page, /Never/).first()
+  if (await never.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await never.click({ timeout: 6000 }).catch(() => undefined)
+    await page.waitForTimeout(800)
+  }
+
+  // Video defaults sit in the lower half of the panel, so take the last match.
+  const ratio = clickable(page, new RegExp(escapeRegExp(params.aspectRatio))).last()
+  if (await ratio.isVisible({ timeout: 2500 }).catch(() => false)) {
+    await ratio.click({ timeout: 6000 }).catch(() => undefined)
+    await page.waitForTimeout(500)
+  }
+
+  const count = clickable(page, new RegExp(`^x${params.outputCount}$`)).last()
+  if (await count.isVisible({ timeout: 2500 }).catch(() => false)) {
+    await count.click({ timeout: 6000 }).catch(() => undefined)
+    await page.waitForTimeout(500)
+  }
+
+  const save = page.getByRole('button', { name: 'Save', exact: true }).first()
+  if (await save.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await save.click({ timeout: 8000 }).catch(() => undefined)
+    await page.waitForTimeout(3000)
+  }
+}
+
+/**
+ * Flow's composer is an agent, not a form: duration and output type are not
+ * exposed as controls next to the prompt, so they are stated in the request.
+ */
+function composeInstruction(prompt: string, params: GenerationParams): string {
+  const shape =
+    params.mode === 'video'
+      ? `Generate a ${params.durationSeconds} second ${params.aspectRatio} video`
+      : `Generate a ${params.aspectRatio} image`
+  return `${shape}: ${prompt}`
+}
+
+async function submitPrompt(page: Page, prompt: string, params: GenerationParams): Promise<void> {
+  const box = page
+    .getByPlaceholder(/what do you want to create/i)
+    .or(page.locator('textarea, [contenteditable="true"]'))
+    .first()
+
+  if (!(await box.isVisible({ timeout: 10_000 }).catch(() => false))) {
     throw new FlowUiError("Couldn't find Flow's prompt box.", await visibleControlLabels(page))
   }
-  await box.click()
-  await box.fill(prompt)
-}
 
-/** Reads Flow's own "Generating will use N credits" quote, if it is shown. */
-async function readQuotedCredits(page: Page): Promise<number | undefined> {
-  const quote = page.getByText(/will use\s+\d+\s+credits?/i).first()
-  const text = await quote.textContent({ timeout: 3000 }).catch(() => null)
-  if (!text) return undefined
+  await box.click({ timeout: 8000 })
+  await page.keyboard.type(composeInstruction(prompt, params), { delay: 8 })
+  await page.waitForTimeout(1200)
 
-  const match = /(\d+)\s+credits?/i.exec(text)
-  return match?.[1] ? Number(match[1]) : undefined
-}
-
-async function submit(page: Page): Promise<void> {
-  const button = page.getByRole('button', { name: /^generate/i }).first()
-  if (!(await button.isVisible({ timeout: 8000 }).catch(() => false))) {
-    throw new FlowUiError("Couldn't find Flow's Generate button.", await visibleControlLabels(page))
+  const send = page.getByRole('button', { name: /arrow_forward|^create$/i }).last()
+  if (await send.isVisible({ timeout: 4000 }).catch(() => false)) {
+    await send.click({ timeout: 8000 }).catch(() => undefined)
+    return
   }
-  await button.click()
+  await page.keyboard.press('Enter')
 }
 
 /**
- * Waits for Flow to produce media. Flow renders results into the page as
- * `<video>` or `<img>` elements, so we watch for sources that were not present
- * when we submitted.
+ * Waits for a clip that can actually be read.
+ *
+ * The `<video>` element appears with its final `src` the moment the job is
+ * queued, long before any bytes exist — so presence of a source means nothing.
+ * Readiness is `readyState >= 1` or a finite duration, which only become true
+ * once Flow has rendered and the browser has metadata.
  */
 async function waitForResults(
   page: Page,
   params: GenerationParams,
   hooks: { throwIfCancelled: () => void; report: (stage: string, progress: number) => void }
 ): Promise<string[]> {
-  const selector = params.mode === 'video' ? 'video[src]' : 'img[src*="blob"], img[src*="googleusercontent"]'
+  const selector = params.mode === 'video' ? 'video[src]' : 'img[src*="googleusercontent"], img[src*="media"]'
   const deadline = Date.now() + GENERATION_TIMEOUT_MS
 
   while (Date.now() < deadline) {
     hooks.throwIfCancelled()
 
-    const sources = await page
+    const ready = await page
       .locator(selector)
-      // Structural casts: the main process has no DOM lib, but these callbacks
-      // run in the page.
       .evaluateAll((nodes) =>
         nodes
-          .map((node) => (node as unknown as { src?: string }).src)
-          .filter((src): src is string => typeof src === 'string' && src.length > 0)
+          .map(
+            (node) => node as unknown as { src?: string; readyState?: number; duration?: number; complete?: boolean }
+          )
+          .filter((node) => typeof node.src === 'string' && node.src.length > 0 && !node.src.startsWith('blob:'))
+          .filter((node) =>
+            node.readyState === undefined
+              ? node.complete === true
+              : node.readyState >= 1 || Number.isFinite(node.duration)
+          )
+          .map((node) => node.src as string)
       )
       .catch(() => [] as string[])
 
-    const unique = [...new Set(sources)]
-    if (unique.length >= params.outputCount) {
-      return unique.slice(0, params.outputCount)
-    }
+    const unique = [...new Set(ready)]
+    if (unique.length >= params.outputCount) return unique.slice(0, params.outputCount)
 
     const elapsed = GENERATION_TIMEOUT_MS - (deadline - Date.now())
     hooks.report(
-      unique.length > 0 ? `Flow returned ${unique.length} of ${params.outputCount}` : 'Flow is generating',
-      Math.min(0.8, 0.45 + (elapsed / GENERATION_TIMEOUT_MS) * 0.35)
+      unique.length > 0 ? `Flow finished ${unique.length} of ${params.outputCount}` : 'Flow is rendering',
+      Math.min(0.85, 0.42 + (elapsed / GENERATION_TIMEOUT_MS) * 0.43)
     )
 
     await page.waitForTimeout(POLL_MS)
   }
 
-  throw new FlowUiError('Flow did not return a result within 12 minutes.')
+  throw new FlowUiError('Flow did not finish rendering within 12 minutes.')
 }
 
 /**
- * Pulls each result into the project's output folder.
- *
- * Flow's own download control is tried first, because a `<video>` in a modern
- * web app is usually fed by MediaSource Extensions: its `src` is a `blob:` URL
- * backed by a stream, and fetching it yields nothing useful. Asking the app to
- * export the file gets the real artifact. Fetching the media URL is kept as a
- * fallback for stills and for any result served as a plain URL, where the
- * page's cookies sign the request for us.
+ * Flow serves results from a normal URL rather than a stream, so fetching from
+ * inside the page — where the session's cookies sign the request — returns the
+ * real file.
  */
 async function downloadResults(args: {
   page: Page
@@ -377,107 +343,57 @@ async function downloadResults(args: {
   const outputs: GenerationOutput[] = []
 
   for (const [index, mediaUrl] of mediaUrls.entries()) {
+    const base64 = await page.evaluate(async (source) => {
+      const response = await fetch(source)
+      if (!response.ok) throw new Error(`Flow returned ${response.status} for the result`)
+      const buffer = await response.arrayBuffer()
+      if (buffer.byteLength === 0) throw new Error('The result was empty')
+
+      const bytes = new Uint8Array(buffer)
+      let binary = ''
+      const CHUNK = 0x8000
+      for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(offset, offset + CHUNK)))
+      }
+      return btoa(binary)
+    }, mediaUrl)
+
     const suffix = mediaUrls.length > 1 ? `-${index + 1}` : ''
     const path = join(outputDirectory, `${generationId}${suffix}.${extension}`)
+    await writeFile(path, Buffer.from(base64, 'base64'))
 
-    const exported = await exportViaFlow(page, index, path)
-    if (!exported) {
-      await fetchMediaToDisk(page, mediaUrl, path)
-    }
-
-    outputs.push({
-      path,
-      url: toMediaUrl('outputs', path),
-      kind: params.mode
-    })
+    outputs.push({ path, url: toMediaUrl('outputs', path), kind: params.mode })
   }
 
   if (outputs.length === 0) {
-    throw new FlowUiError(
-      'Flow finished, but neither its download control nor the media URL yielded a file. ' +
-        'If the result plays in Flow but will not export here, the clip is likely streamed rather than served as a file.'
-    )
+    throw new FlowUiError('Flow finished but no media could be downloaded.')
   }
 
   return outputs
 }
 
 /**
- * Asks Flow to export result `index` and saves what it hands back.
- * Returns false when no download control could be driven, so the caller can
- * fall back rather than fail the whole run.
- */
-async function exportViaFlow(page: Page, index: number, destination: string): Promise<boolean> {
-  const direct = page.getByRole('button', { name: /^download/i })
-
-  try {
-    // The control often lives behind a per-result overflow menu, so reveal it.
-    if ((await direct.count()) === 0) {
-      const overflow = page.getByRole('button', { name: /^(more|more options|more_vert)$/i }).nth(index)
-      if (await overflow.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await overflow.click()
-      }
-    }
-
-    const control = page.getByRole('menuitem', { name: /download/i }).or(direct)
-    const target = control.nth(Math.min(index, Math.max(0, (await control.count()) - 1)))
-
-    if (!(await target.isVisible({ timeout: 4000 }).catch(() => false))) return false
-
-    const [download] = await Promise.all([page.waitForEvent('download', { timeout: 90_000 }), target.click()])
-
-    await download.saveAs(destination)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Fallback: pull the media URL from inside the page, using its cookies. */
-async function fetchMediaToDisk(page: Page, mediaUrl: string, destination: string): Promise<void> {
-  const base64 = await page.evaluate(async (source) => {
-    const response = await fetch(source)
-    if (!response.ok) throw new Error(`Fetch failed with ${response.status}`)
-    const buffer = await response.arrayBuffer()
-    if (buffer.byteLength === 0) throw new Error('The media stream returned no bytes')
-
-    const bytes = new Uint8Array(buffer)
-    let binary = ''
-    const CHUNK = 0x8000
-    for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(offset, offset + CHUNK)))
-    }
-    return btoa(binary)
-  }, mediaUrl)
-
-  await writeFile(destination, Buffer.from(base64, 'base64'))
-}
-
-/**
- * The visible, clickable labels on the page — the payload that turns "selector
- * not found" into something actionable.
+ * Visible control labels, with Material Symbols ligatures stripped — Flow
+ * renders icon names as text, so raw labels are half `more_vert` and friends.
  */
 async function visibleControlLabels(page: Page): Promise<string[]> {
   try {
-    const labels = await page.locator('button, [role="button"], [role="option"], [role="tab"]').evaluateAll((nodes) =>
-      nodes
-        .filter((node) => (node as unknown as { offsetParent: unknown }).offsetParent !== null)
-        .map((node) => (node.textContent ?? '').trim())
-        .filter((text) => text.length > 0 && text.length < 40)
-    )
-    return [...new Set(labels)].filter((label) => !isIconLigature(label)).slice(0, 40)
+    const labels = await page
+      .locator('button, [role="button"], [role="option"], [role="tab"], [role="radio"]')
+      .evaluateAll((nodes) =>
+        nodes
+          .filter((node) => (node as unknown as { offsetParent: unknown }).offsetParent !== null)
+          .map((node) => (node.textContent ?? '').trim())
+          .filter((text) => text.length > 0 && text.length < 45)
+      )
+    return [...new Set(labels)].map(stripLigatures).filter(Boolean).slice(0, 40)
   } catch {
     return []
   }
 }
 
-/**
- * Material Symbols render their icon name as text content, so `more_vert` and
- * `play_arrow` arrive looking like labels. They are never real controls, and
- * they drown out the ones that are.
- */
-function isIconLigature(label: string): boolean {
-  return /^[a-z]+(_[a-z]+)+$/.test(label)
+function stripLigatures(label: string): string {
+  return label.replace(/[a-z]+(_[a-z0-9]+)+/g, '').trim()
 }
 
 function escapeRegExp(input: string): string {
@@ -487,46 +403,38 @@ function escapeRegExp(input: string): string {
 export interface FlowDiagnostics {
   capturedAt: string
   entryUrl: string
-  /** Where the browser actually ended up. */
   finalUrl: string
   title: string
   signedIn: boolean
   isLandingPage: boolean
-  /** Visible control labels, icon-font noise removed. */
   labels: string[]
-  /** Links that look like they lead into the tool — candidate entry URLs. */
   candidateAppUrls: string[]
 }
 
-/**
- * Opens Flow and reports what it found, without generating anything.
- *
- * This exists because the entrance moves. Rather than guessing a URL, this
- * records where the browser landed, whether the profile has a Google session,
- * and every in-product link on the page — which is how the real app URL gets
- * discovered instead of invented.
- */
+/** Opens Flow and reports what it found, without generating anything. */
 export async function inspectFlow(context: BrowserContext, entryUrl: string): Promise<FlowDiagnostics> {
-  const entryPage = await context.newPage()
-  let page = entryPage
+  const page = await context.newPage()
 
   try {
     await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-    // Flow hydrates late; a snapshot taken immediately is mostly empty.
     await page.waitForTimeout(6000)
 
-    // Follow the entrance the same way a real run would, so the report
-    // describes where generation would actually land.
     if (await isLandingPage(page)) {
-      page = (await clickIntoApp(page, context)) ?? page
+      await clickable(page, ENTRY_CONTROL_TEXT)
+        .first()
+        .click({ timeout: 8000 })
+        .catch(() => undefined)
+      await page.waitForTimeout(7000)
     }
+
+    await dismissConsent(page)
 
     const candidateAppUrls = await page
       .locator('a[href]')
       .evaluateAll((nodes) =>
         nodes
           .map((node) => (node as unknown as { href?: string }).href ?? '')
-          .filter((href) => href.includes('flow') || href.includes('/fx/'))
+          .filter((href) => href.includes('/fx/tools/flow'))
       )
       .catch(() => [] as string[])
 
@@ -541,10 +449,6 @@ export async function inspectFlow(context: BrowserContext, entryUrl: string): Pr
       candidateAppUrls: [...new Set(candidateAppUrls)].slice(0, 30)
     }
   } finally {
-    for (const open of new Set([entryPage, page])) {
-      await open.close().catch(() => undefined)
-    }
+    await page.close().catch(() => undefined)
   }
 }
-
-export type { Locator }
