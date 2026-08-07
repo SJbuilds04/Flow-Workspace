@@ -46,6 +46,8 @@ export interface FlowRunOptions {
   generationId: string
   outputDirectory: string
   entryUrl: string
+  /** A previously resolved Flow project to reuse, skipping the whole entrance. */
+  projectUrl?: string | null
   report: (stage: string, progress: number) => void
   throwIfCancelled: () => void
 }
@@ -53,6 +55,8 @@ export interface FlowRunOptions {
 export interface FlowRunResult {
   outputs: GenerationOutput[]
   creditsUsed?: number
+  /** The project this run used, worth remembering for the next one. */
+  projectUrl?: string
 }
 
 /**
@@ -69,21 +73,30 @@ export interface FlowRunResult {
  * of the 16:9 control is literally "crop_16_916:9".
  */
 export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRunResult> {
-  const { context, params, prompt, generationId, outputDirectory, entryUrl, report, throwIfCancelled } = options
+  const { context, params, prompt, generationId, outputDirectory, entryUrl, projectUrl, report, throwIfCancelled } =
+    options
 
-  report('Opening Google Flow', 0.06)
   const page = await context.newPage()
 
   try {
-    await openFlowApp(page, context, entryUrl)
-    throwIfCancelled()
+    // A remembered project is the fast path: straight in, no landing page, no
+    // consent walk, and no new project cluttering the Flow account.
+    const reused = projectUrl ? await openExistingProject(page, projectUrl) : false
 
-    report('Clearing first-run dialogs', 0.14)
-    await dismissConsent(page)
-    throwIfCancelled()
+    if (!reused) {
+      report('Opening Google Flow', 0.06)
+      await openFlowApp(page, context, entryUrl)
+      throwIfCancelled()
 
-    report('Opening a Flow project', 0.2)
-    await ensureProject(page)
+      report('Clearing first-run dialogs', 0.14)
+      await dismissConsent(page)
+      throwIfCancelled()
+
+      report('Opening a Flow project', 0.2)
+      await ensureProject(page)
+    } else {
+      report('Reopening your Flow project', 0.2)
+    }
     throwIfCancelled()
 
     report('Applying generation settings', 0.28)
@@ -100,7 +113,7 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
     report('Downloading results', 0.88)
     const outputs = await downloadResults({ page, mediaUrls, generationId, outputDirectory, params })
 
-    return { outputs }
+    return { outputs, projectUrl: page.url() }
   } finally {
     await page.close().catch(() => undefined)
   }
@@ -178,6 +191,25 @@ async function dismissConsent(page: Page): Promise<void> {
 
     if (!advanced) return
     await page.waitForTimeout(3000)
+  }
+}
+
+/**
+ * Reopens a known project. Returns false — rather than throwing — when the
+ * project is gone or the prompt box never appears, so the caller can fall back
+ * to the full entrance instead of failing the run.
+ */
+async function openExistingProject(page: Page, projectUrl: string): Promise<boolean> {
+  try {
+    await page.goto(projectUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+    await page.waitForTimeout(7000)
+
+    if (!page.url().includes('/project/')) return false
+
+    const box = page.getByPlaceholder(/what do you want to create/i).first()
+    return await box.isVisible({ timeout: 12_000 }).catch(() => false)
+  } catch {
+    return false
   }
 }
 
@@ -312,9 +344,14 @@ async function waitForResults(
     const unique = [...new Set(ready)]
     if (unique.length >= params.outputCount) return unique.slice(0, params.outputCount)
 
+    // Flow reports no progress of its own, so say how long we have been
+    // waiting rather than implying a percentage we cannot know.
     const elapsed = GENERATION_TIMEOUT_MS - (deadline - Date.now())
+    const waited = formatWait(elapsed)
     hooks.report(
-      unique.length > 0 ? `Flow finished ${unique.length} of ${params.outputCount}` : 'Flow is rendering',
+      unique.length > 0
+        ? `Flow finished ${unique.length} of ${params.outputCount} — ${waited} elapsed`
+        : `Flow is rendering — ${waited} elapsed`,
       Math.min(0.85, 0.42 + (elapsed / GENERATION_TIMEOUT_MS) * 0.43)
     )
 
@@ -394,6 +431,12 @@ async function visibleControlLabels(page: Page): Promise<string[]> {
 
 function stripLigatures(label: string): string {
   return label.replace(/[a-z]+(_[a-z0-9]+)+/g, '').trim()
+}
+
+function formatWait(ms: number): string {
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 function escapeRegExp(input: string): string {

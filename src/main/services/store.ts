@@ -221,6 +221,15 @@ export class WorkspaceStore {
     return { ...account }
   }
 
+  /** Remembers the Flow project a profile generates into. */
+  async setAccountFlowProject(accountId: string, projectUrl: string | null): Promise<Account | undefined> {
+    const account = this.findAccount(accountId)
+    if (!account) return undefined
+    account.flowProjectUrl = projectUrl
+    await this.flush()
+    return { ...account }
+  }
+
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {
     this.data.settings = { ...this.data.settings, ...patch }
     await this.flush()
