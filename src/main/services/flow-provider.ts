@@ -21,6 +21,8 @@ const CONSENT_ADVANCE = ['Continue', 'Next', 'I agree', 'Accept all', 'Accept', 
 
 const GENERATION_TIMEOUT_MS = 12 * 60_000
 const POLL_MS = 6000
+/** How often to reload while waiting, so finished media appears in the DOM. */
+const REFRESH_INTERVAL_MS = 45_000
 
 export class FlowUiError extends Error {
   readonly diagnostics: string[]
@@ -306,59 +308,97 @@ async function submitPrompt(page: Page, prompt: string, params: GenerationParams
 }
 
 /**
- * Waits for a clip that can actually be read.
+ * Waits for a clip that can actually be downloaded.
  *
- * The `<video>` element appears with its final `src` the moment the job is
- * queued, long before any bytes exist — so presence of a source means nothing.
- * Readiness is `readyState >= 1` or a finite duration, which only become true
- * once Flow has rendered and the browser has metadata.
+ * Two traps here, both found the hard way:
+ *
+ * - The `<video>` element carries its final `src` the moment the job is
+ *   queued, long before any bytes exist, so a source alone means nothing.
+ * - `readyState` is useless as a readiness signal. A video that is off-screen
+ *   or marked `preload="none"` never loads metadata, so it sits at 0 forever
+ *   even after Flow has finished rendering — the run then times out on a clip
+ *   that has been sitting ready on Google's servers for minutes.
+ *
+ * So readiness is tested directly: ask the server for the first couple of
+ * kilobytes and see whether bytes come back. The page is also reloaded
+ * periodically, because Flow's SPA does not reliably surface newly finished
+ * media into a tab that has been sitting open.
  */
 async function waitForResults(
   page: Page,
   params: GenerationParams,
   hooks: { throwIfCancelled: () => void; report: (stage: string, progress: number) => void }
 ): Promise<string[]> {
-  const selector = params.mode === 'video' ? 'video[src]' : 'img[src*="googleusercontent"], img[src*="media"]'
+  const selector =
+    params.mode === 'video'
+      ? 'video[src], video source[src]'
+      : 'img[src*="googleusercontent"], img[src*="media"], img[src*="/fx/api/"]'
   const deadline = Date.now() + GENERATION_TIMEOUT_MS
+  let lastRefresh = Date.now()
 
   while (Date.now() < deadline) {
     hooks.throwIfCancelled()
 
-    const ready = await page
+    const candidates = await page
       .locator(selector)
       .evaluateAll((nodes) =>
         nodes
-          .map(
-            (node) => node as unknown as { src?: string; readyState?: number; duration?: number; complete?: boolean }
-          )
-          .filter((node) => typeof node.src === 'string' && node.src.length > 0 && !node.src.startsWith('blob:'))
-          .filter((node) =>
-            node.readyState === undefined
-              ? node.complete === true
-              : node.readyState >= 1 || Number.isFinite(node.duration)
-          )
-          .map((node) => node.src as string)
+          .map((node) => (node as unknown as { src?: string }).src ?? '')
+          .filter((src) => src.length > 0 && !src.startsWith('blob:') && !src.startsWith('data:'))
       )
       .catch(() => [] as string[])
 
-    const unique = [...new Set(ready)]
-    if (unique.length >= params.outputCount) return unique.slice(0, params.outputCount)
+    const ready = await probeDownloadable(page, [...new Set(candidates)])
+    if (ready.length >= params.outputCount) return ready.slice(0, params.outputCount)
 
     // Flow reports no progress of its own, so say how long we have been
     // waiting rather than implying a percentage we cannot know.
     const elapsed = GENERATION_TIMEOUT_MS - (deadline - Date.now())
     const waited = formatWait(elapsed)
     hooks.report(
-      unique.length > 0
-        ? `Flow finished ${unique.length} of ${params.outputCount} — ${waited} elapsed`
+      ready.length > 0
+        ? `Flow finished ${ready.length} of ${params.outputCount} — ${waited} elapsed`
         : `Flow is rendering — ${waited} elapsed`,
       Math.min(0.85, 0.42 + (elapsed / GENERATION_TIMEOUT_MS) * 0.43)
     )
 
     await page.waitForTimeout(POLL_MS)
+
+    if (Date.now() - lastRefresh > REFRESH_INTERVAL_MS) {
+      lastRefresh = Date.now()
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined)
+      await page.waitForTimeout(6000)
+    }
   }
 
-  throw new FlowUiError('Flow did not finish rendering within 12 minutes.')
+  throw new FlowUiError(
+    'Flow did not finish rendering within 12 minutes. If the clip exists in Flow, open the project there and it will be picked up on the next run.'
+  )
+}
+
+/**
+ * Returns the URLs that actually serve bytes right now. A ranged request keeps
+ * the check cheap — we only need to know the file exists, not fetch it twice.
+ */
+async function probeDownloadable(page: Page, urls: string[]): Promise<string[]> {
+  if (urls.length === 0) return []
+
+  return page
+    .evaluate(async (candidates) => {
+      const ready: string[] = []
+      for (const url of candidates) {
+        try {
+          const response = await fetch(url, { headers: { Range: 'bytes=0-2047' } })
+          if (!response.ok && response.status !== 206) continue
+          const buffer = await response.arrayBuffer()
+          if (buffer.byteLength > 512) ready.push(url)
+        } catch {
+          /* not ready yet */
+        }
+      }
+      return ready
+    }, urls)
+    .catch(() => [] as string[])
 }
 
 /**
