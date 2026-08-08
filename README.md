@@ -1,8 +1,23 @@
 # Flow Workspace
 
-A desktop workspace for prompt-driven media generation. Electron + React + TypeScript + TailwindCSS, with Playwright doing double duty: it drives the end-to-end tests, and it powers the per-account persistent browser profiles that generations run through.
+Plan a video as a shot list, render every shot through Google Flow across several of your own Google accounts in parallel, and join the result into one file.
+
+Electron + React + TypeScript + TailwindCSS. Playwright does double duty: it drives the end-to-end tests, and it powers the per-account persistent browser profiles that generations run through. Groq turns a brief — or a story you already wrote — into the shot list.
 
 Dark mode only, by design.
+
+## Read this before you use it
+
+**This drives Google Flow's web interface as you.** There is no official API involved. It signs into your own Google accounts in real browser profiles and clicks the same buttons you would.
+
+That has consequences worth understanding up front:
+
+- **It spends real credits.** Every shot is a real Flow generation on a real account. A 60-second video is 6+ shots. Check what a run will cost before starting one — the storyboard shows an estimate.
+- **It will break.** Google redesigns Flow, and UI automation breaks when it does. When that happens the error tells you what Flow actually showed, which is usually enough to fix the selector in `src/main/services/flow-provider.ts`. Treat breakage as expected maintenance, not as a bug report.
+- **Your accounts, your responsibility.** Automating a service you have an account with is between you and that service's terms. This project takes no position on that and gives you no cover for it.
+- **Character consistency is conditioning, not identity locking.** Reference photos make a subject much more likely to look the same across shots. They do not guarantee it. Expect a recognisable person, not an identical one.
+
+Nothing here is affiliated with, endorsed by, or supported by Google.
 
 ## Getting started
 
