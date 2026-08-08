@@ -230,7 +230,41 @@ async function ensureProject(page: Page): Promise<void> {
   }
 
   if (!page.url().includes('/project/')) {
-    throw new FlowUiError("Couldn't open a Flow project.", await visibleControlLabels(page))
+    throw new FlowUiError(
+      "Couldn't open a Flow project. This is usually Flow's first-run setup still waiting — open Settings, sign this profile out and back in, and finish the welcome screens in the browser window.",
+      await visibleControlLabels(page)
+    )
+  }
+}
+
+/**
+ * Gets a freshly connected account through Flow's one-time welcome flow.
+ *
+ * Run right after sign-in, while the browser is still visible and the user is
+ * present, because these screens are exactly where a headless run gets stuck —
+ * and where a person can just click the thing if we cannot.
+ */
+export async function prepareFlowAccount(page: Page, entryUrl: string): Promise<boolean> {
+  try {
+    await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+    await page.waitForTimeout(6000)
+
+    if (await isLandingPage(page)) {
+      const entrance = clickable(page, ENTRY_CONTROL_TEXT).first()
+      if (await entrance.isVisible({ timeout: 6000 }).catch(() => false)) {
+        await entrance.click({ timeout: 10_000 }).catch(() => undefined)
+        await page.waitForTimeout(7000)
+      }
+    }
+
+    await dismissConsent(page)
+
+    // Creating the first project now means the first real generation does not
+    // have to, and confirms the account can actually reach the tool.
+    await ensureProject(page)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -439,7 +473,18 @@ async function downloadResults(args: {
     const path = join(outputDirectory, `${generationId}${suffix}.${extension}`)
     await writeFile(path, Buffer.from(base64, 'base64'))
 
-    outputs.push({ path, url: toMediaUrl('outputs', path), kind: params.mode })
+    const output: GenerationOutput = { path, url: toMediaUrl('outputs', path), kind: params.mode }
+
+    // Flow gives no poster image, and a video card with no frame reads as
+    // unfinished. Grab one from the clip itself.
+    if (params.mode === 'video') {
+      const posterPath = join(outputDirectory, `${generationId}${suffix}-poster.jpg`)
+      if (await capturePoster(page, mediaUrl, posterPath)) {
+        output.thumbnailUrl = toMediaUrl('outputs', posterPath)
+      }
+    }
+
+    outputs.push(output)
   }
 
   if (outputs.length === 0) {
@@ -447,6 +492,71 @@ async function downloadResults(args: {
   }
 
   return outputs
+}
+
+/**
+ * Draws a frame out of the finished clip to use as its thumbnail.
+ *
+ * Done inside the page because the media URL is same-origin there, so the
+ * canvas is not tainted and can be read back. Best-effort: a missing poster
+ * costs a thumbnail, never the generation.
+ */
+async function capturePoster(page: Page, mediaUrl: string, destination: string): Promise<boolean> {
+  try {
+    const base64 = await page.evaluate(async (url) => {
+      const doc = (globalThis as unknown as { document: { createElement(tag: string): unknown } }).document
+
+      const video = doc.createElement('video') as {
+        src: string
+        muted: boolean
+        currentTime: number
+        duration: number
+        videoWidth: number
+        videoHeight: number
+        onloadeddata: (() => void) | null
+        onseeked: (() => void) | null
+        onerror: (() => void) | null
+      }
+
+      video.muted = true
+      video.src = url
+
+      await new Promise<void>((resolve, reject) => {
+        video.onloadeddata = () => resolve()
+        video.onerror = () => reject(new Error('poster: video failed to load'))
+        setTimeout(() => reject(new Error('poster: timed out')), 30_000)
+      })
+
+      // A frame slightly in tends to be more representative than frame zero,
+      // which is often a fade from black.
+      video.currentTime = Number.isFinite(video.duration) ? Math.min(1.5, video.duration * 0.2) : 0
+      await new Promise<void>((resolve) => {
+        video.onseeked = () => resolve()
+        setTimeout(resolve, 5000)
+      })
+
+      const canvas = doc.createElement('canvas') as {
+        width: number
+        height: number
+        getContext(kind: string): { drawImage(source: unknown, x: number, y: number): void } | null
+        toDataURL(type: string, quality: number): string
+      }
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+
+      const context = canvas.getContext('2d')
+      if (!context || canvas.width === 0) throw new Error('poster: no frame available')
+      context.drawImage(video, 0, 0)
+
+      return canvas.toDataURL('image/jpeg', 0.82).split(',')[1] ?? ''
+    }, mediaUrl)
+
+    if (!base64) return false
+    await writeFile(destination, Buffer.from(base64, 'base64'))
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

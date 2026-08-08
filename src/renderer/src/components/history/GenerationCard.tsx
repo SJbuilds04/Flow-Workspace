@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
-import { AlertCircle, Download, FolderOpen, MoreHorizontal, Play, Trash2 } from 'lucide-react'
+import { AlertCircle, Download, Film, FolderOpen, ImageIcon, MoreHorizontal, Play, Trash2 } from 'lucide-react'
 import { findFlowAspect, type Generation } from '@shared/types'
 import { cn } from '@/lib/cn'
 import { formatDateTime, formatDuration, formatRelative } from '@/lib/format'
@@ -57,11 +57,20 @@ export function GenerationCard({ generation, onDownload, onReveal, onDelete, onO
             <span className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
           </>
         ) : (
-          <div className="flex size-full items-center justify-center">
+          // Every card in History is settled, so a shimmer here would read as
+          // "still working" on something that has already finished.
+          <div className="flex size-full flex-col items-center justify-center gap-2">
             {failed ? (
               <AlertCircle className="size-5 text-danger/70" aria-hidden />
             ) : (
-              <div className="skeleton size-full" />
+              <>
+                {generation.mode === 'video' ? (
+                  <Film className="size-5 text-ink-ghost" aria-hidden />
+                ) : (
+                  <ImageIcon className="size-5 text-ink-ghost" aria-hidden />
+                )}
+                <span className="text-2xs text-ink-ghost">Ready — open to play</span>
+              </>
             )}
           </div>
         )}
