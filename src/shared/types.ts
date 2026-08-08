@@ -39,7 +39,15 @@ export interface Account {
    * generation.
    */
   flowProjectUrl?: string | null
+  /**
+   * Set when Flow reported this account out of credits. The queue skips it
+   * until then, so a exhausted profile does not keep swallowing jobs. Flow's
+   * allowance resets daily, so this is a date, not a permanent flag.
+   */
+  creditsExhaustedUntil?: string | null
 }
+
+export const ACCOUNT_TONES: readonly AccountTone[] = ['green', 'purple', 'blue'] as const
 
 export type ProfileState = 'idle' | 'launching' | 'ready' | 'unavailable' | 'signing-in'
 
@@ -151,10 +159,20 @@ export interface Scene {
   locked: boolean
 }
 
+/**
+ * How the shot list was produced.
+ *
+ * `brief` invents the shots from a short description. `story` takes writing
+ * that already exists and only cuts it into shots — it must not add events,
+ * characters or beats that are not in the source.
+ */
+export type PlanMode = 'brief' | 'story'
+
 /** An ordered set of shots that add up to one finished video. */
 export interface ScenePlan {
   id: string
   projectId: string
+  mode: PlanMode
   /** What the user asked for, kept so the plan can be regenerated. */
   brief: string
   targetDurationSeconds: number
@@ -165,6 +183,33 @@ export interface ScenePlan {
   plannerModel: string
   createdAt: string
   updatedAt: string
+}
+
+export type RenderJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+/** One shot's render, tracked independently so it can be retried or moved. */
+export interface RenderJob {
+  id: string
+  planId: string
+  projectId: string
+  sceneId: string
+  sceneTitle: string
+  status: RenderJobStatus
+  /** Assigned when a profile picks the job up. */
+  accountId?: string
+  /** Profiles that already failed this job, so it is not handed back to them. */
+  triedAccountIds: string[]
+  attempts: number
+  generationId?: string
+  stage?: string
+  error?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface QueueSnapshot {
+  jobs: RenderJob[]
+  running: boolean
 }
 
 export const PLAN_TARGET_DURATIONS: readonly number[] = [15, 30, 60, 90, 120] as const

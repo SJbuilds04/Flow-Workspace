@@ -8,8 +8,10 @@ import type {
   Generation,
   GenerationProgress,
   GenerationRequest,
+  PlanMode,
   ProfileStatus,
   Project,
+  QueueSnapshot,
   Result,
   ResultCode,
   ScenePlan,
@@ -23,12 +25,14 @@ import { clearSecret, hasSecret, setSecret, type SecretName } from './services/s
 import { type GenerationEngine } from './services/generation-engine'
 import { fromMediaUrl } from './services/media-url'
 import { type ProfileManager, ProfileUnavailableError, SignInAbandonedError } from './services/profile-manager'
+import type { RenderQueue } from './services/render-queue'
 import { type WorkspaceStore } from './services/store'
 
 interface RegisterOptions {
   store: WorkspaceStore
   profiles: ProfileManager
   engine: GenerationEngine
+  queue: RenderQueue
 }
 
 function ok<T>(data: T): Result<T> {
@@ -67,10 +71,15 @@ function currentPlatform(): WorkspaceBootstrap['platform'] {
   return 'other'
 }
 
-export function registerIpc({ store, profiles, engine }: RegisterOptions): void {
+export function registerIpc({ store, profiles, engine, queue }: RegisterOptions): void {
   profiles.on('status', (status: ProfileStatus) => {
     broadcast(IpcChannels.eventProfileStatus, status)
   })
+
+  queue.on('changed', (snapshot: QueueSnapshot) => broadcast(IpcChannels.eventQueueChanged, snapshot))
+  queue.on('plan', (plan: ScenePlan) => broadcast(IpcChannels.eventPlanUpdated, plan))
+  queue.on('generation', (generation: Generation) => broadcast(IpcChannels.eventGenerationSettled, generation))
+  queue.on('account', (account: Account) => broadcast(IpcChannels.eventAccountUpdated, account))
 
   engine.on('progress', (progress: GenerationProgress) => {
     broadcast(IpcChannels.eventGenerationProgress, progress)
@@ -198,9 +207,60 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
     return ok({ ...diagnostics, reportPath })
   })
 
+  // --------------------------------------------------------- account roster
+
+  handle<[{ name: string }], Account>(IpcChannels.accountCreate, async (input) =>
+    ok(await store.createAccount(input.name))
+  )
+
+  handle<[{ id: string; name: string }], Account>(IpcChannels.accountRename, async (input) => {
+    const account = await store.renameAccount(input.id, input.name)
+    return account ? ok(account) : fail('That profile no longer exists.', 'NOT_FOUND')
+  })
+
+  handle<[{ id: string }], { id: string }>(IpcChannels.accountDelete, async (input) => {
+    const removed = await store.deleteAccount(input.id)
+    if (!removed) return fail('The last profile cannot be removed.', 'INVALID_INPUT')
+
+    await profiles.close(removed.id).catch(() => undefined)
+    return ok({ id: removed.id })
+  })
+
+  // ------------------------------------------------------------- render queue
+
+  handle<[{ planId: string }], QueueSnapshot>(IpcChannels.queueEnqueuePlan, async (input) => {
+    const plan = store.findPlan(input.planId)
+    if (!plan) return fail('That storyboard no longer exists.', 'NOT_FOUND')
+
+    const usable = store.accounts.filter((account) => account.identity)
+    if (usable.length === 0) {
+      return fail('Connect a Google account to a profile before rendering.', 'PROFILE_UNAVAILABLE')
+    }
+
+    queue.enqueuePlan(plan)
+    return ok(queue.snapshot())
+  })
+
+  handle<[], QueueSnapshot>(IpcChannels.queueCancelAll, async () => {
+    queue.cancelAll()
+    return ok(queue.snapshot())
+  })
+
+  handle<[{ id: string }], QueueSnapshot>(IpcChannels.queueCancelJob, async (input) => {
+    queue.cancelJob(input.id)
+    return ok(queue.snapshot())
+  })
+
+  handle<[], QueueSnapshot>(IpcChannels.queueClearSettled, async () => {
+    queue.clearSettled()
+    return ok(queue.snapshot())
+  })
+
+  handle<[], QueueSnapshot>(IpcChannels.queueSnapshot, async () => ok(queue.snapshot()))
+
   // ------------------------------------------------------------ scene planner
 
-  handle<[{ projectId: string; brief: string; targetDurationSeconds: number }], ScenePlan>(
+  handle<[{ projectId: string; mode: PlanMode; brief: string; targetDurationSeconds: number }], ScenePlan>(
     IpcChannels.planCreate,
     async (input) => {
       const project = store.findProject(input.projectId)
@@ -209,6 +269,7 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
       try {
         const plan = await planScenes({
           projectId: input.projectId,
+          mode: input.mode,
           brief: input.brief,
           targetDurationSeconds: input.targetDurationSeconds,
           aspectRatio: store.settings.defaults.aspectRatio,

@@ -1,10 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { KeyRound, Plus, Sparkles, Trash2, Wand2 } from 'lucide-react'
+import { FileText, KeyRound, Plus, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import {
   PLAN_TARGET_DURATIONS,
   estimateCredits,
   planDuration,
+  type PlanMode,
   type Scene,
   type ScenePlan,
   type VideoDuration
@@ -15,6 +16,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { Modal } from '@/components/ui/Modal'
 import { SegmentedControl } from '@/components/composer/SegmentedControl'
 import { useWorkspaceStore } from '@/store/workspace-store'
+import { RenderBar } from './RenderBar'
 import { SceneCard } from './SceneCard'
 
 interface StoryboardViewProps {
@@ -37,13 +39,14 @@ export function StoryboardView({ projectId }: StoryboardViewProps): ReactNode {
 
   const plan = useMemo(() => plans.find((item) => item.projectId === projectId) ?? null, [plans, projectId])
 
+  const [mode, setMode] = useState<PlanMode>('brief')
   const [brief, setBrief] = useState('')
   const [target, setTarget] = useState<number>(60)
   const [confirmReplan, setConfirmReplan] = useState(false)
 
   const submit = async (): Promise<void> => {
     if (!brief.trim() || planning) return
-    const created = await createPlan(projectId, brief, target)
+    const created = await createPlan(projectId, mode, brief, target)
     if (created) setBrief('')
   }
 
@@ -101,16 +104,39 @@ export function StoryboardView({ projectId }: StoryboardViewProps): ReactNode {
   return (
     <div className="space-y-6">
       <div className="rounded-3xl border border-edge-subtle bg-surface-1 p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <SegmentedControl
+            label="Planning mode"
+            size="sm"
+            value={mode}
+            disabled={planning}
+            onChange={setMode}
+            options={[
+              { value: 'brief', label: 'Generate scenes', icon: <Wand2 className="size-3.5" aria-hidden /> },
+              { value: 'story', label: 'Paste your story', icon: <FileText className="size-3.5" aria-hidden /> }
+            ]}
+          />
+          <p className="text-2xs text-ink-ghost">
+            {mode === 'story'
+              ? 'Your writing is only cut into shots — nothing is invented.'
+              : 'A short brief is expanded into a full shot sequence.'}
+          </p>
+        </div>
+
         <label htmlFor="brief" className="text-xs font-medium text-ink-muted">
-          {plan ? 'Re-plan from a new brief' : 'What should the video be?'}
+          {mode === 'story' ? 'Paste your story' : plan ? 'Re-plan from a new brief' : 'What should the video be?'}
         </label>
 
         <textarea
           id="brief"
           value={brief}
-          rows={3}
+          rows={mode === 'story' ? 8 : 3}
           disabled={planning}
-          placeholder="A 60 second cinematic short about a lighthouse keeper who finds something in the fog…"
+          placeholder={
+            mode === 'story'
+              ? 'Paste the written story here. Existing paragraph or scene breaks are respected…'
+              : 'A 60 second cinematic short about a lighthouse keeper who finds something in the fog…'
+          }
           onChange={(event) => setBrief(event.target.value)}
           className={cn(
             'mt-2 block w-full resize-none rounded-2xl border border-edge-subtle bg-canvas-sunken/60 px-3.5 py-3',
@@ -138,7 +164,7 @@ export function StoryboardView({ projectId }: StoryboardViewProps): ReactNode {
             iconLeft={<Wand2 className="size-3.5" />}
             onClick={() => (plan ? setConfirmReplan(true) : void submit())}
           >
-            {planning ? 'Planning…' : 'Plan scenes'}
+            {planning ? 'Planning…' : mode === 'story' ? 'Split into scenes' : 'Plan scenes'}
           </Button>
         </div>
       </div>
@@ -146,6 +172,7 @@ export function StoryboardView({ projectId }: StoryboardViewProps): ReactNode {
       {plan ? (
         <>
           <PlanSummary plan={plan} onDelete={() => void deletePlan(plan.id)} />
+          <RenderBar plan={plan} />
 
           <div className="space-y-3">
             <AnimatePresence initial={false}>

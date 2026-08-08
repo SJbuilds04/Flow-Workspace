@@ -34,6 +34,35 @@ export class FlowUiError extends Error {
   }
 }
 
+/**
+ * Raised when Flow says this account has no credits left. Distinct from a UI
+ * failure because the response is different: don't retry here, move the work
+ * to another profile.
+ */
+export class FlowCreditsExhaustedError extends Error {
+  constructor(detail?: string) {
+    super(detail ? `This account is out of Flow credits: ${detail}` : 'This account is out of Flow credits.')
+    this.name = 'FlowCreditsExhaustedError'
+  }
+}
+
+/**
+ * Phrasings that mean "no credits". Google has not committed to any of these
+ * strings, so the list is deliberately broad — a missed match costs a wasted
+ * retry on a dead account, which the queue recovers from.
+ */
+const CREDIT_EXHAUSTED_PATTERNS = [
+  /out of credits/i,
+  /no credits (left|remaining)/i,
+  /insufficient credits/i,
+  /run out of credits/i,
+  /credit limit/i,
+  /not enough credits/i,
+  /you(?:'ve| have) used all/i,
+  /daily limit reached/i,
+  /quota (exceeded|reached)/i
+]
+
 export class FlowSignedOutError extends Error {
   constructor() {
     super('That profile is not signed in to Google Flow. Connect a Google account for it in Settings, then try again.')
@@ -108,6 +137,10 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
     report('Writing the prompt', 0.34)
     await submitPrompt(page, prompt, params)
     throwIfCancelled()
+
+    // Checked right after submitting: when an account is dry Flow says so
+    // straight away, and there is nothing to wait for.
+    await assertHasCredits(page)
 
     report('Flow is generating', 0.42)
     const mediaUrls = await waitForResults(page, params, { throwIfCancelled, report })
@@ -339,6 +372,32 @@ async function submitPrompt(page: Page, prompt: string, params: GenerationParams
     return
   }
   await page.keyboard.press('Enter')
+}
+
+/**
+ * Reads the page for Flow's "no credits" messaging.
+ *
+ * Deliberately a short look: the agent answers a doomed request quickly, and a
+ * long wait here would delay the failover to a profile that still has credits.
+ */
+async function assertHasCredits(page: Page): Promise<void> {
+  await page.waitForTimeout(6000)
+
+  const text = await page
+    .locator('body')
+    .innerText({ timeout: 6000 })
+    .catch(() => '')
+
+  const hit = CREDIT_EXHAUSTED_PATTERNS.find((pattern) => pattern.test(text))
+  if (!hit) return
+
+  // Hand back the sentence Flow actually used, so the UI is specific.
+  const sentence = text
+    .split(/(?<=[.!?])\s+/)
+    .find((part) => hit.test(part))
+    ?.trim()
+
+  throw new FlowCreditsExhaustedError(sentence?.slice(0, 160))
 }
 
 /**

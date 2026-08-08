@@ -39,6 +39,12 @@ interface RunOptions {
   flowUrl: string
   /** Called when a run settles on a Flow project worth reusing next time. */
   onProjectResolved?: (projectUrl: string) => void
+  /**
+   * Per-run progress. The engine also emits a global `progress` event, but with
+   * several profiles rendering at once only the caller knows which job a given
+   * update belongs to.
+   */
+  onProgress?: (progress: GenerationProgress) => void
 }
 
 interface ActiveRun {
@@ -71,7 +77,15 @@ export class GenerationEngine extends EventEmitter {
     return true
   }
 
-  async run({ request, account, attachments, engine, flowUrl, onProjectResolved }: RunOptions): Promise<Generation> {
+  async run({
+    request,
+    account,
+    attachments,
+    engine,
+    flowUrl,
+    onProjectResolved,
+    onProgress
+  }: RunOptions): Promise<Generation> {
     const params = normaliseParams(request)
     const startedAt = Date.now()
 
@@ -100,12 +114,9 @@ export class GenerationEngine extends EventEmitter {
     }
 
     const report = (stage: string, progress: number): void => {
-      this.emit('progress', {
-        generationId: generation.id,
-        status: 'running',
-        progress,
-        stage
-      } satisfies GenerationProgress)
+      const payload: GenerationProgress = { generationId: generation.id, status: 'running', progress, stage }
+      onProgress?.(payload)
+      this.emit('progress', payload)
     }
 
     try {

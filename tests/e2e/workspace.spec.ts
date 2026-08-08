@@ -195,6 +195,35 @@ test.describe('settings', () => {
       .not.toBe('personal')
   })
 
+  test('adds and removes browser profiles', async ({ window, userDataDir }) => {
+    await window.getByRole('button', { name: 'Settings' }).click()
+    await expect(window.getByRole('button', { name: 'Connect Google' })).toHaveCount(3)
+
+    await window.getByLabel('New profile name').fill('Client 3')
+    await window.getByRole('button', { name: 'Add profile' }).click()
+
+    await expect(window.getByRole('button', { name: 'Connect Google' })).toHaveCount(4)
+    await expect(window.getByText('Client 3', { exact: true })).toBeVisible()
+
+    await window.getByRole('button', { name: 'Remove Client 3' }).click()
+    await expect(window.getByRole('button', { name: 'Connect Google' })).toHaveCount(3)
+
+    await expect
+      .poll(async () => {
+        const raw = await readFile(join(userDataDir, 'workspace.json'), 'utf-8')
+        return (JSON.parse(raw) as { accounts: unknown[] }).accounts.length
+      })
+      .toBe(3)
+  })
+
+  test('the profile generations run through cannot be removed', async ({ window }) => {
+    await window.getByRole('button', { name: 'Settings' }).click()
+
+    // Removing the routed profile would leave generation pointing at nothing.
+    await expect(window.getByRole('button', { name: 'Remove Personal' })).toBeDisabled()
+    await expect(window.getByRole('button', { name: 'Remove Client 1' })).toBeEnabled()
+  })
+
   test('offers to connect a Google account on every unconnected profile', async ({ window }) => {
     await window.getByRole('button', { name: 'Settings' }).click()
 

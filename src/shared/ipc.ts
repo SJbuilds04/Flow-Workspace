@@ -26,6 +26,16 @@ export const IpcChannels = {
   secretClear: 'secret:clear',
   secretStatus: 'secret:status',
 
+  accountCreate: 'account:create',
+  accountRename: 'account:rename',
+  accountDelete: 'account:delete',
+
+  queueEnqueuePlan: 'queue:enqueue-plan',
+  queueCancelAll: 'queue:cancel-all',
+  queueCancelJob: 'queue:cancel-job',
+  queueClearSettled: 'queue:clear-settled',
+  queueSnapshot: 'queue:snapshot',
+
   generationRun: 'generation:run',
   generationCancel: 'generation:cancel',
   generationDelete: 'generation:delete',
@@ -46,6 +56,8 @@ export const IpcChannels = {
   eventGenerationSettled: 'event:generation-settled',
   eventProfileStatus: 'event:profile-status',
   eventAccountUpdated: 'event:account-updated',
+  eventQueueChanged: 'event:queue-changed',
+  eventPlanUpdated: 'event:plan-updated',
   eventWindowState: 'event:window-state'
 } as const
 
