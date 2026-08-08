@@ -8,12 +8,12 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SJbuilds04/Flow-Studio.git"
+    "url": "git+https://github.com/SJbuilds04/Flow-Workspace.git"
   },
   "bugs": {
-    "url": "https://github.com/SJbuilds04/Flow-Studio/issues"
+    "url": "https://github.com/SJbuilds04/Flow-Workspace/issues"
   },
-  "homepage": "https://github.com/SJbuilds04/Flow-Studio#readme",
+  "homepage": "https://github.com/SJbuilds04/Flow-Workspace#readme",
   "keywords": [
     "electron",
     "react",
