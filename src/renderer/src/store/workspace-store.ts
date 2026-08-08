@@ -8,12 +8,14 @@ import type {
   GenerationProgress,
   ProfileStatus,
   Project,
+  ScenePlan,
   Settings
 } from '@shared/types'
 import { DEFAULT_PARAMS } from '@shared/types'
 import { toast } from './toast-store'
 
 export type WorkspaceView = 'project' | 'settings'
+export type ProjectTab = 'compose' | 'storyboard'
 export type BootStatus = 'loading' | 'ready' | 'error'
 
 /** Per-project composer state, so switching projects never loses a draft. */
@@ -41,8 +43,14 @@ interface WorkspaceState {
   settings: Settings | null
   profileStatuses: Record<string, ProfileStatus>
 
+  plans: ScenePlan[]
+  hasPlannerKey: boolean
+  planning: boolean
+
   activeProjectId: string | null
   view: WorkspaceView
+  /** Which surface the open project shows: single prompt, or a storyboard. */
+  projectTab: ProjectTab
   search: string
   drafts: Record<string, Draft>
   activeRun: ActiveRun | null
@@ -54,7 +62,14 @@ interface WorkspaceState {
   bootstrap: () => Promise<void>
   selectProject: (id: string) => void
   setView: (view: WorkspaceView) => void
+  setProjectTab: (tab: ProjectTab) => void
   setSearch: (search: string) => void
+
+  createPlan: (projectId: string, brief: string, targetDurationSeconds: number) => Promise<boolean>
+  savePlan: (plan: ScenePlan) => Promise<void>
+  deletePlan: (id: string) => Promise<void>
+  setPlannerKey: (value: string) => Promise<boolean>
+  clearPlannerKey: () => Promise<void>
 
   createProject: (name: string, glyph?: string) => Promise<Project | null>
   renameProject: (id: string, name: string) => Promise<void>
@@ -103,11 +118,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   projects: [],
   accounts: [],
   generations: [],
+  plans: [],
+  hasPlannerKey: false,
+  planning: false,
   settings: null,
   profileStatuses: {},
 
   activeProjectId: null,
   view: 'project',
+  projectTab: 'compose',
   search: '',
   drafts: {},
   activeRun: null,
@@ -133,7 +152,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return
     }
 
-    const { projects, accounts, generations, settings, profileStatuses, platform } = result.data
+    const { projects, accounts, generations, plans, settings, profileStatuses, platform, hasPlannerKey } = result.data
     const drafts: Record<string, Draft> = {}
     for (const project of projects) {
       drafts[project.id] = emptyDraft(settings)
@@ -146,6 +165,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       projects,
       accounts,
       generations,
+      plans,
+      hasPlannerKey,
       settings,
       profileStatuses: indexStatuses(profileStatuses),
       activeProjectId: projects[0]?.id ?? null,
@@ -155,7 +176,65 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   selectProject: (id) => set({ activeProjectId: id, view: 'project' }),
   setView: (view) => set({ view }),
+  setProjectTab: (projectTab) => set({ projectTab }),
   setSearch: (search) => set({ search }),
+
+  createPlan: async (projectId, brief, targetDurationSeconds) => {
+    set({ planning: true })
+    const result = await window.flow.plans.create({ projectId, brief, targetDurationSeconds })
+    set({ planning: false })
+
+    if (!result.ok) {
+      toast.error('Could not plan the scenes', result.error)
+      return false
+    }
+
+    set((state) => ({
+      plans: [result.data, ...state.plans.filter((plan) => plan.projectId !== projectId)]
+    }))
+    return true
+  },
+
+  savePlan: async (plan) => {
+    // Optimistic: storyboard edits are frequent and should never feel laggy.
+    set((state) => ({ plans: state.plans.map((item) => (item.id === plan.id ? plan : item)) }))
+
+    const result = await window.flow.plans.save(plan)
+    if (!result.ok) {
+      toast.error('Could not save the storyboard', result.error)
+      return
+    }
+    set((state) => ({ plans: state.plans.map((item) => (item.id === plan.id ? result.data : item)) }))
+  },
+
+  deletePlan: async (id) => {
+    const result = await window.flow.plans.remove({ id })
+    if (!result.ok) {
+      toast.error('Could not delete the storyboard', result.error)
+      return
+    }
+    set((state) => ({ plans: state.plans.filter((plan) => plan.id !== id) }))
+  },
+
+  setPlannerKey: async (value) => {
+    const result = await window.flow.secrets.set({ name: 'groqApiKey', value })
+    if (!result.ok) {
+      toast.error('Could not save the key', result.error)
+      return false
+    }
+    set({ hasPlannerKey: result.data.stored })
+    if (result.data.stored) toast.success('Groq key saved')
+    return result.data.stored
+  },
+
+  clearPlannerKey: async () => {
+    const result = await window.flow.secrets.clear({ name: 'groqApiKey' })
+    if (!result.ok) {
+      toast.error('Could not remove the key', result.error)
+      return
+    }
+    set({ hasPlannerKey: false })
+  },
 
   createProject: async (name, glyph) => {
     const result = await window.flow.projects.create({ name, ...(glyph ? { glyph } : {}) })
@@ -199,6 +278,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return {
         projects,
         drafts,
+        plans: state.plans.filter((plan) => plan.projectId !== id),
         generations: state.generations.filter((generation) => generation.projectId !== id),
         activeProjectId: state.activeProjectId === id ? (projects[0]?.id ?? null) : state.activeProjectId
       }

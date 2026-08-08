@@ -18,6 +18,14 @@ export const IpcChannels = {
   profileSignOut: 'profile:sign-out',
   flowDiagnose: 'flow:diagnose',
 
+  planCreate: 'plan:create',
+  planSave: 'plan:save',
+  planDelete: 'plan:delete',
+
+  secretSet: 'secret:set',
+  secretClear: 'secret:clear',
+  secretStatus: 'secret:status',
+
   generationRun: 'generation:run',
   generationCancel: 'generation:cancel',
   generationDelete: 'generation:delete',
