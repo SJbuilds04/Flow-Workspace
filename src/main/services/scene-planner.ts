@@ -69,6 +69,8 @@ function systemPrompt(mode: PlanMode): string {
     '- Describe one continuous camera take per shot. No cuts inside a shot.',
     '- Refer to recurring people or creatures by their character tag, written as @tag.',
     '- Do not mention shot numbers, transitions, edits, captions, text overlays or audio cues.',
+    '- Never state the aspect ratio or resolution. That is set as a separate control, and',
+    '  repeating it in the prompt wastes words and can confuse the renderer.',
     '',
     'Return ONLY a JSON object of this exact shape:',
     '{',
@@ -85,7 +87,8 @@ function userPrompt(request: PlanRequest): string {
     request.mode === 'story'
       ? `Target runtime: about ${request.targetDurationSeconds} seconds, but keep every beat.`
       : `Total runtime: ${request.targetDurationSeconds} seconds.`,
-    `Aspect ratio: ${request.aspectRatio}.`,
+    // Given as framing context only; the renderer is told the ratio separately.
+    `Framing: ${request.aspectRatio === '9:16' ? 'vertical' : 'widescreen'} — compose for it, but never mention it.`,
     '',
     request.mode === 'story' ? 'Story to cut into shots:' : 'Brief:',
     request.brief.trim()

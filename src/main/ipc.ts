@@ -232,9 +232,18 @@ export function registerIpc({ store, profiles, engine, queue }: RegisterOptions)
     const plan = store.findPlan(input.planId)
     if (!plan) return fail('That storyboard no longer exists.', 'NOT_FOUND')
 
-    const usable = store.accounts.filter((account) => account.identity)
+    const allowed = store.settings.renderAccountIds
+    const usable = store.accounts.filter(
+      (account) => account.identity && (allowed.length === 0 || allowed.includes(account.id))
+    )
+
     if (usable.length === 0) {
-      return fail('Connect a Google account to a profile before rendering.', 'PROFILE_UNAVAILABLE')
+      return fail(
+        allowed.length > 0
+          ? 'None of the selected profiles has a Google account connected.'
+          : 'Connect a Google account to a profile before rendering.',
+        'PROFILE_UNAVAILABLE'
+      )
     }
 
     queue.enqueuePlan(plan)

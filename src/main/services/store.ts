@@ -38,6 +38,7 @@ function defaultSettings(): Settings {
   return {
     activeAccountId: 'personal',
     engine: 'google-flow',
+    renderAccountIds: [],
     flowModels: [...DEFAULT_FLOW_MODELS],
     flowUrl: FLOW_URL,
     plannerModel: DEFAULT_PLANNER_MODEL,
