@@ -143,7 +143,7 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
     if (!account) return fail('That profile is not configured.', 'NOT_FOUND')
 
     try {
-      const identity = await profiles.signIn(account)
+      const identity = await profiles.signIn(account, store.settings.flowUrl)
       const updated = await store.setAccountIdentity(account.id, identity)
       if (!updated) return fail('That profile is not configured.', 'NOT_FOUND')
 

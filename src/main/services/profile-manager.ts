@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { chromium, type BrowserContext, type LaunchOptions } from 'playwright-core'
 import type { Account, AccountIdentity, ProfileState, ProfileStatus } from '@shared/types'
+import { FLOW_URL, prepareFlowAccount } from './flow-provider'
 import { detectGoogleIdentity, GOOGLE_SIGN_IN_URL } from './google-session'
 import { paths } from './paths'
 
@@ -177,7 +178,7 @@ export class ProfileManager extends EventEmitter {
    * done, the session lives in the profile directory and survives restarts, so
    * this is a one-time cost per profile.
    */
-  async signIn(account: Account): Promise<AccountIdentity> {
+  async signIn(account: Account, flowUrl?: string): Promise<AccountIdentity> {
     this.signInAborts.delete(account.id)
 
     // Sign-in must be visible even when the app is configured to run headless.
@@ -203,6 +204,11 @@ export class ProfileManager extends EventEmitter {
 
         const identity = await detectGoogleIdentity(context)
         if (identity) {
+          // Walk Flow's one-time welcome screens now, while the window is
+          // visible and the user is here to help if a step needs them.
+          this.setStatus(account.id, 'signing-in', 'Finishing Flow setup in the browser window…')
+          await prepareFlowAccount(page, flowUrl ?? FLOW_URL).catch(() => false)
+
           this.setStatus(account.id, 'ready')
           return identity
         }
