@@ -174,7 +174,10 @@ test.describe('storyboard with a stored plan', () => {
     await openStoryboard(window)
 
     await expect(window.getByText('Join into one video')).toBeVisible()
-    await expect(window.getByText('No shots rendered yet.')).toBeVisible()
+
+    // Deliberately not asserting the reason text: it differs by whether the
+    // host has FFmpeg, and the behaviour under test is that joining is
+    // unavailable, not why.
     await expect(window.getByRole('button', { name: /^Join/ })).toBeDisabled()
   })
 
