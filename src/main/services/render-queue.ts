@@ -115,10 +115,15 @@ export class RenderQueue extends EventEmitter {
    */
   private availableAccounts(exclude: string[]): Account[] {
     const now = Date.now()
+    // Read fresh each time, so changing the selection mid-run takes effect on
+    // the next shot rather than only on the next render.
+    const allowed = this.deps.store.settings.renderAccountIds
+
     return this.deps.store.accounts.filter((account) => {
       if (this.busy.has(account.id)) return false
       if (exclude.includes(account.id)) return false
       if (!account.identity) return false
+      if (allowed.length > 0 && !allowed.includes(account.id)) return false
 
       const parked = account.creditsExhaustedUntil
       return !parked || new Date(parked).getTime() <= now

@@ -304,6 +304,12 @@ export interface Settings {
   activeAccountId: string
   /** Which engine runs generations. */
   engine: GenerationEngineId
+  /**
+   * Profiles the render queue is allowed to use. Empty means every connected
+   * profile, which is also what a newly added profile inherits — an explicit
+   * list would silently exclude it.
+   */
+  renderAccountIds: string[]
   /** Model names offered in the picker, matching Flow's own dropdown labels. */
   flowModels: string[]
   /** Where the Flow automation starts. Configurable because Google moves it. */

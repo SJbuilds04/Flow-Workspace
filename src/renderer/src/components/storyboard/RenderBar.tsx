@@ -22,6 +22,8 @@ interface RenderBarProps {
  */
 export function RenderBar({ plan }: RenderBarProps): ReactNode {
   const accounts = useWorkspaceStore((state) => state.accounts)
+  const settings = useWorkspaceStore((state) => state.settings)
+  const updateSettings = useWorkspaceStore((state) => state.updateSettings)
   const queue = useWorkspaceStore((state) => state.queue)
   const renderPlan = useWorkspaceStore((state) => state.renderPlan)
   const cancelQueue = useWorkspaceStore((state) => state.cancelQueue)
@@ -35,9 +37,25 @@ export function RenderBar({ plan }: RenderBarProps): ReactNode {
 
   const connected = accounts.filter((account) => account.identity)
   const now = Date.now()
-  const usable = connected.filter(
+
+  // An empty selection means "all connected", so a profile added later is
+  // included by default rather than silently left out.
+  const selectedIds = settings?.renderAccountIds ?? []
+  const isSelected = (id: string): boolean => selectedIds.length === 0 || selectedIds.includes(id)
+
+  const chosen = connected.filter((account) => isSelected(account.id))
+  const usable = chosen.filter(
     (account) => !account.creditsExhaustedUntil || new Date(account.creditsExhaustedUntil).getTime() <= now
   )
+
+  const toggleAccount = (id: string): void => {
+    const current = selectedIds.length > 0 ? selectedIds : connected.map((account) => account.id)
+    const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+
+    // Rendering with nothing selected is never what someone means.
+    if (next.length === 0) return
+    void updateSettings({ renderAccountIds: next })
+  }
 
   const remaining = plan.scenes.filter((scene) => !scene.locked && scene.status !== 'completed').length
 
@@ -50,6 +68,7 @@ export function RenderBar({ plan }: RenderBarProps): ReactNode {
             {connected.length === 0
               ? 'No profile has a Google account connected yet.'
               : `${remaining} shot${remaining === 1 ? '' : 's'} to render across ${usable.length} of ${connected.length} profile${connected.length === 1 ? '' : 's'}`}
+            {chosen.length > usable.length && ' · some are out of credits'}
           </p>
         </div>
 
@@ -76,31 +95,41 @@ export function RenderBar({ plan }: RenderBarProps): ReactNode {
       </div>
 
       {connected.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {connected.map((account) => {
-            const parked = account.creditsExhaustedUntil && new Date(account.creditsExhaustedUntil).getTime() > now
-            const working = jobs.find((job) => job.status === 'running' && job.accountId === account.id)
+        <div className="mt-3">
+          <p className="mb-1.5 text-2xs uppercase tracking-wider text-ink-ghost">Render on</p>
 
-            return (
-              <span
-                key={account.id}
-                title={parked ? 'Out of credits until the daily reset' : undefined}
-                className={cn(
-                  'flex items-center gap-1.5 rounded-lg border px-2 py-1 text-2xs',
-                  parked
-                    ? 'border-danger/25 bg-danger-soft text-danger'
-                    : working
-                      ? 'border-accent/30 bg-accent-soft text-accent'
-                      : 'border-edge-subtle bg-surface-2 text-ink-faint'
-                )}
-              >
-                <StatusDot tone={account.tone} state={working ? 'ready' : 'idle'} size="sm" />
-                {account.name}
-                {parked && ' · no credits'}
-                {working && ' · rendering'}
-              </span>
-            )
-          })}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {connected.map((account) => {
+              const parked = account.creditsExhaustedUntil && new Date(account.creditsExhaustedUntil).getTime() > now
+              const working = jobs.find((job) => job.status === 'running' && job.accountId === account.id)
+              const on = isSelected(account.id)
+
+              return (
+                <button
+                  key={account.id}
+                  type="button"
+                  role="switch"
+                  aria-checked={on}
+                  aria-label={`Render on ${account.name}`}
+                  title={parked ? 'Out of credits until the daily reset' : undefined}
+                  onClick={() => toggleAccount(account.id)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg border px-2 py-1 text-2xs',
+                    'transition-colors duration-200 ease-flow',
+                    !on && 'border-edge-subtle bg-transparent text-ink-ghost line-through opacity-60 hover:opacity-90',
+                    on && parked && 'border-danger/25 bg-danger-soft text-danger',
+                    on && !parked && working && 'border-accent/30 bg-accent-soft text-accent',
+                    on && !parked && !working && 'border-edge bg-surface-2 text-ink-muted hover:border-edge-strong'
+                  )}
+                >
+                  <StatusDot tone={account.tone} state={working ? 'ready' : 'idle'} size="sm" />
+                  {account.name}
+                  {on && parked && ' · no credits'}
+                  {on && working && ' · rendering'}
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
 

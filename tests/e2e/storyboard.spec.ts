@@ -191,3 +191,54 @@ test.describe('storyboard with a stored plan', () => {
       .toBe(0)
   })
 })
+
+test.describe('choosing which profiles render', () => {
+  const connectedAt = '2026-08-08T10:00:00.000Z'
+
+  test.use({
+    seedEnv: { GROQ_API_KEY: 'test-key-never-sent' },
+    seedIdentities: {
+      personal: { email: 'personal@sjbuilds.test', connectedAt },
+      'client-1': { email: 'client1@sjbuilds.test', connectedAt }
+    },
+    seedProjects: [
+      {
+        id: PROJECT_ID,
+        name: 'Lighthouse',
+        glyph: '◆',
+        createdAt: connectedAt,
+        updatedAt: connectedAt
+      }
+    ],
+    seedPlans: [SEEDED_PLAN]
+  })
+
+  test('picks which profiles render, and keeps at least one', async ({ window, userDataDir }) => {
+    await window.getByRole('radiogroup', { name: 'Project mode' }).getByRole('radio', { name: 'Storyboard' }).click()
+
+    // Every connected profile takes part until one is explicitly turned off.
+    const personal = window.getByRole('switch', { name: 'Render on Personal' })
+    const client1 = window.getByRole('switch', { name: 'Render on Client 1' })
+
+    await expect(personal).toHaveAttribute('aria-checked', 'true')
+    await expect(client1).toHaveAttribute('aria-checked', 'true')
+    // Client 2 has no account connected, so it is not offered at all.
+    await expect(window.getByRole('switch', { name: 'Render on Client 2' })).toHaveCount(0)
+
+    await client1.click()
+    await expect(client1).toHaveAttribute('aria-checked', 'false')
+    await expect(personal).toHaveAttribute('aria-checked', 'true')
+
+    // The queue reads this from disk, so it has to actually persist.
+    await expect
+      .poll(async () => {
+        const raw = await readFile(join(userDataDir, 'workspace.json'), 'utf-8')
+        return (JSON.parse(raw) as { settings: { renderAccountIds: string[] } }).settings.renderAccountIds
+      })
+      .toEqual(['personal'])
+
+    // Turning the last one off would mean rendering nowhere.
+    await personal.click()
+    await expect(personal).toHaveAttribute('aria-checked', 'true')
+  })
+})
