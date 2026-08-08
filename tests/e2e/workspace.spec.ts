@@ -173,6 +173,28 @@ test.describe('settings', () => {
     await expect(window.getByRole('button', { name: 'Start' })).toHaveCount(3)
   })
 
+  test('marks which profile generations run through, and can switch it', async ({ window, userDataDir }) => {
+    await window.getByRole('button', { name: 'Settings' }).click()
+
+    // Starting a browser must not be mistaken for choosing where work goes,
+    // so exactly one profile is labelled and the others offer to take over.
+    await expect(window.getByText('Generating here', { exact: true })).toHaveCount(1)
+    await expect(window.getByRole('button', { name: 'Generate here' })).toHaveCount(2)
+
+    await window.getByRole('button', { name: 'Generate here' }).first().click()
+
+    await expect(window.getByText('Generating here', { exact: true })).toHaveCount(1)
+    await expect(window.getByRole('button', { name: 'Generate here' })).toHaveCount(2)
+
+    // The switch is the routing decision, so it has to survive a restart.
+    await expect
+      .poll(async () => {
+        const raw = await readFile(join(userDataDir, 'workspace.json'), 'utf-8')
+        return (JSON.parse(raw) as { settings: { activeAccountId: string } }).settings.activeAccountId
+      })
+      .not.toBe('personal')
+  })
+
   test('offers to connect a Google account on every unconnected profile', async ({ window }) => {
     await window.getByRole('button', { name: 'Settings' }).click()
 

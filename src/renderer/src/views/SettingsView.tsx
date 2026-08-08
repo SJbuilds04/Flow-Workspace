@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { useState } from 'react'
-import { ArrowLeft, Eye, Flame, Gauge, LogIn, LogOut, Plus, Stethoscope, X } from 'lucide-react'
+import { ArrowLeft, Check, Eye, Flame, Gauge, LogIn, LogOut, Plus, Stethoscope, X } from 'lucide-react'
 import {
   FLOW_ASPECT_RATIOS,
   VIDEO_DURATIONS,
@@ -126,10 +126,18 @@ export function SettingsView(): ReactNode {
           </Field>
         </Section>
 
-        <Section title="Browser profiles" description="Each account runs in its own persistent Playwright context.">
+        <Section
+          title="Browser profiles"
+          description="Each account runs in its own persistent Playwright context. Generations always run through the profile marked “Generating here” — starting a browser does not change that."
+        >
           <div className="divide-y divide-edge-subtle overflow-hidden rounded-2xl border border-edge-subtle">
             {accounts.map((account) => (
-              <ProfileRow key={account.id} account={account} status={statuses[account.id]} />
+              <ProfileRow
+                key={account.id}
+                account={account}
+                status={statuses[account.id]}
+                isActive={account.id === settings.activeAccountId}
+              />
             ))}
           </div>
 
@@ -342,15 +350,28 @@ function DiagnosticRow({ label, value }: { label: string; value: string }): Reac
 }
 
 /**
- * One browser profile: who is signed into it, whether the browser is up, and
- * the two actions that matter — connect an account, and start/stop the context.
+ * One browser profile.
+ *
+ * The active profile is called out explicitly, because starting a profile's
+ * browser is *not* the same as generating through it — that routing is a
+ * separate choice, and conflating the two silently sends work to the wrong
+ * Google account.
  */
-function ProfileRow({ account, status }: { account: Account; status?: ProfileStatus }): ReactNode {
+function ProfileRow({
+  account,
+  status,
+  isActive
+}: {
+  account: Account
+  status?: ProfileStatus
+  isActive: boolean
+}): ReactNode {
   const launchProfile = useWorkspaceStore((state) => state.launchProfile)
   const closeProfile = useWorkspaceStore((state) => state.closeProfile)
   const signInProfile = useWorkspaceStore((state) => state.signInProfile)
   const cancelSignIn = useWorkspaceStore((state) => state.cancelSignIn)
   const signOutProfile = useWorkspaceStore((state) => state.signOutProfile)
+  const setActiveAccount = useWorkspaceStore((state) => state.setActiveAccount)
 
   const state = status?.state ?? 'idle'
   const signingIn = state === 'signing-in'
@@ -360,7 +381,7 @@ function ProfileRow({ account, status }: { account: Account; status?: ProfileSta
     status?.message ?? (state === 'ready' ? 'Browser running' : state === 'launching' ? 'Starting…' : 'Browser idle')
 
   return (
-    <div className="flex items-start gap-3 bg-surface-1 px-4 py-3.5">
+    <div className={cn('flex items-start gap-3 px-4 py-3.5', isActive ? 'bg-accent-soft/40' : 'bg-surface-1')}>
       {identity?.avatarUrl ? (
         <img src={identity.avatarUrl} alt="" className="mt-0.5 size-7 shrink-0 rounded-full object-cover" />
       ) : (
@@ -372,6 +393,11 @@ function ProfileRow({ account, status }: { account: Account; status?: ProfileSta
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-2 truncate text-sm text-ink">
           {account.name}
+          {isActive && (
+            <span className="shrink-0 rounded-md bg-accent/20 px-1.5 py-0.5 text-2xs font-medium text-accent">
+              Generating here
+            </span>
+          )}
           {identity && (
             <span className="shrink-0 rounded-md bg-success-soft px-1.5 py-0.5 text-2xs font-medium text-success">
               Connected
@@ -389,6 +415,17 @@ function ProfileRow({ account, status }: { account: Account; status?: ProfileSta
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        {!isActive && !signingIn && (
+          <Button
+            variant="secondary"
+            size="sm"
+            iconLeft={<Check className="size-3.5" />}
+            onClick={() => void setActiveAccount(account.id)}
+          >
+            Generate here
+          </Button>
+        )}
+
         {signingIn ? (
           <Button variant="ghost" size="sm" onClick={() => void cancelSignIn(account.id)}>
             Cancel
