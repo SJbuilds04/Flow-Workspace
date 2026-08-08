@@ -4,6 +4,7 @@ import { handleMediaProtocol, registerMediaScheme } from './media-protocol'
 import { GenerationEngine } from './services/generation-engine'
 import { ensureAppDirectories } from './services/paths'
 import { ProfileManager } from './services/profile-manager'
+import { RenderQueue } from './services/render-queue'
 import { WorkspaceStore } from './services/store'
 import { createMainWindow } from './window'
 
@@ -18,6 +19,7 @@ if (!app.requestSingleInstanceLock()) {
 const store = new WorkspaceStore()
 const profiles = new ProfileManager()
 const engine = new GenerationEngine(profiles)
+const queue = new RenderQueue({ store, engine })
 
 let mainWindow: BrowserWindow | null = null
 
@@ -34,7 +36,7 @@ app.whenReady().then(async () => {
   profiles.setHeadless(!store.settings.showBrowserWindow)
 
   handleMediaProtocol()
-  registerIpc({ store, profiles, engine })
+  registerIpc({ store, profiles, engine, queue })
 
   mainWindow = createMainWindow()
 

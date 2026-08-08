@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { useState } from 'react'
-import { ArrowLeft, Check, Eye, Flame, Gauge, LogIn, LogOut, Plus, Stethoscope, X } from 'lucide-react'
+import { ArrowLeft, Check, Eye, Flame, Gauge, LogIn, LogOut, Plus, Stethoscope, Trash2, X } from 'lucide-react'
 import {
   FLOW_ASPECT_RATIOS,
   VIDEO_DURATIONS,
@@ -158,6 +158,8 @@ export function SettingsView(): ReactNode {
             ))}
           </div>
 
+          <AddProfile />
+
           <ToggleRow
             icon={<Eye className="size-4" />}
             title="Show the browser window"
@@ -255,6 +257,45 @@ function ModelListEditor({ models }: { models: string[] }): ReactNode {
           Add
         </Button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * More profiles means more parallel renders and more daily credit allowance,
+ * so adding one is a first-class action rather than a fixed roster.
+ */
+function AddProfile(): ReactNode {
+  const addAccount = useWorkspaceStore((state) => state.addAccount)
+  const [name, setName] = useState('')
+
+  const add = (): void => {
+    if (!name.trim()) return
+    void addAccount(name)
+    setName('')
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <TextField
+        value={name}
+        placeholder="Add a profile — e.g. Client 3"
+        aria-label="New profile name"
+        containerClassName="flex-1"
+        onChange={(event) => setName(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') add()
+        }}
+      />
+      <Button
+        variant="secondary"
+        size="sm"
+        iconLeft={<Plus className="size-3.5" />}
+        disabled={!name.trim()}
+        onClick={add}
+      >
+        Add profile
+      </Button>
     </div>
   )
 }
@@ -450,6 +491,7 @@ function ProfileRow({
   const cancelSignIn = useWorkspaceStore((state) => state.cancelSignIn)
   const signOutProfile = useWorkspaceStore((state) => state.signOutProfile)
   const setActiveAccount = useWorkspaceStore((state) => state.setActiveAccount)
+  const removeAccount = useWorkspaceStore((state) => state.removeAccount)
 
   const state = status?.state ?? 'idle'
   const signingIn = state === 'signing-in'
@@ -542,6 +584,15 @@ function ProfileRow({
             {state === 'unavailable' ? 'Retry' : 'Start'}
           </Button>
         )}
+
+        <IconButton
+          icon={<Trash2 className="size-3.5" />}
+          label={`Remove ${account.name}`}
+          size="sm"
+          tone="danger"
+          disabled={isActive}
+          onClick={() => void removeAccount(account.id)}
+        />
       </div>
     </div>
   )

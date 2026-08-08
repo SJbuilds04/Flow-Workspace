@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Character, FlowAspectRatio, Scene, ScenePlan, VideoDuration } from '@shared/types'
+import type { Character, FlowAspectRatio, PlanMode, Scene, ScenePlan, VideoDuration } from '@shared/types'
 import { VIDEO_DURATIONS } from '@shared/types'
 import { getSecret } from './secrets'
 
@@ -24,6 +24,7 @@ export class PlannerKeyMissingError extends PlannerError {
 
 export interface PlanRequest {
   projectId: string
+  mode: PlanMode
   brief: string
   targetDurationSeconds: number
   aspectRatio: FlowAspectRatio
@@ -35,13 +36,32 @@ export interface PlanRequest {
  * runtime out of those exact durations. Anything else would have to be trimmed
  * or padded later, which is worse than planning around the constraint.
  */
-function systemPrompt(): string {
+function systemPrompt(mode: PlanMode): string {
+  const intent =
+    mode === 'story'
+      ? [
+          'You cut an existing piece of writing into individual shots.',
+          '',
+          'The story below is already written. Your job is ONLY to divide it into shots and',
+          'describe each one visually. Do NOT invent events, characters, locations or endings',
+          'that are not in the source. Do not summarise it away either: every beat in the',
+          'source must appear in some shot, in the original order.',
+          'If the writing already marks its own scenes or paragraphs, respect those breaks.'
+        ]
+      : [
+          'You plan short AI-generated videos as a sequence of individual shots.',
+          '',
+          'Expand the brief into a coherent sequence with a beginning, middle and end.'
+        ]
+
   return [
-    'You plan short AI-generated videos as a sequence of individual shots.',
+    ...intent,
     '',
     'Each shot is rendered separately by a text-to-video model, then joined in order.',
     `Every shot MUST have a duration of exactly one of: ${VIDEO_DURATIONS.join(', ')} seconds.`,
-    'The shot durations must add up to the requested total runtime, or as close as those values allow.',
+    mode === 'story'
+      ? 'Use as many shots as the story needs; the requested runtime is a guide, not a limit.'
+      : 'The shot durations must add up to the requested total runtime, or as close as those values allow.',
     '',
     'Rules for the prompts you write:',
     '- Write each shot prompt so it stands alone: the model rendering shot 3 cannot see shots 1 and 2.',
@@ -62,10 +82,12 @@ function systemPrompt(): string {
 
 function userPrompt(request: PlanRequest): string {
   return [
-    `Total runtime: ${request.targetDurationSeconds} seconds.`,
+    request.mode === 'story'
+      ? `Target runtime: about ${request.targetDurationSeconds} seconds, but keep every beat.`
+      : `Total runtime: ${request.targetDurationSeconds} seconds.`,
     `Aspect ratio: ${request.aspectRatio}.`,
     '',
-    'Brief:',
+    request.mode === 'story' ? 'Story to cut into shots:' : 'Brief:',
     request.brief.trim()
   ].join('\n')
 }
@@ -87,7 +109,9 @@ export async function planScenes(request: PlanRequest): Promise<ScenePlan> {
   if (!apiKey) throw new PlannerKeyMissingError()
 
   if (!request.brief.trim()) {
-    throw new PlannerError('Describe the video you want before planning scenes.')
+    throw new PlannerError(
+      request.mode === 'story' ? 'Paste the story you want cut into shots.' : 'Describe the video you want.'
+    )
   }
 
   const body = {
@@ -96,7 +120,7 @@ export async function planScenes(request: PlanRequest): Promise<ScenePlan> {
     // Ask for JSON explicitly so we are parsing a document, not prose.
     response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: systemPrompt() },
+      { role: 'system', content: systemPrompt(request.mode) },
       { role: 'user', content: userPrompt(request) }
     ]
   }
@@ -233,6 +257,7 @@ function buildPlan(request: PlanRequest, raw: RawPlan): ScenePlan {
   return {
     id: randomUUID(),
     projectId: request.projectId,
+    mode: request.mode,
     brief: request.brief.trim(),
     targetDurationSeconds: request.targetDurationSeconds,
     aspectRatio: request.aspectRatio,

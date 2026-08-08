@@ -6,8 +6,10 @@ import type {
   Generation,
   GenerationParams,
   GenerationProgress,
+  PlanMode,
   ProfileStatus,
   Project,
+  QueueSnapshot,
   ScenePlan,
   Settings
 } from '@shared/types'
@@ -46,6 +48,7 @@ interface WorkspaceState {
   plans: ScenePlan[]
   hasPlannerKey: boolean
   planning: boolean
+  queue: QueueSnapshot
 
   activeProjectId: string | null
   view: WorkspaceView
@@ -65,7 +68,15 @@ interface WorkspaceState {
   setProjectTab: (tab: ProjectTab) => void
   setSearch: (search: string) => void
 
-  createPlan: (projectId: string, brief: string, targetDurationSeconds: number) => Promise<boolean>
+  createPlan: (projectId: string, mode: PlanMode, brief: string, targetDurationSeconds: number) => Promise<boolean>
+  renderPlan: (planId: string) => Promise<void>
+  cancelQueue: () => Promise<void>
+  cancelJob: (id: string) => Promise<void>
+  clearSettledJobs: () => Promise<void>
+
+  addAccount: (name: string) => Promise<void>
+  renameAccount: (id: string, name: string) => Promise<void>
+  removeAccount: (id: string) => Promise<void>
   savePlan: (plan: ScenePlan) => Promise<void>
   deletePlan: (id: string) => Promise<void>
   setPlannerKey: (value: string) => Promise<boolean>
@@ -121,6 +132,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   plans: [],
   hasPlannerKey: false,
   planning: false,
+  queue: { jobs: [], running: false },
   settings: null,
   profileStatuses: {},
 
@@ -179,9 +191,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setProjectTab: (projectTab) => set({ projectTab }),
   setSearch: (search) => set({ search }),
 
-  createPlan: async (projectId, brief, targetDurationSeconds) => {
+  createPlan: async (projectId, mode, brief, targetDurationSeconds) => {
     set({ planning: true })
-    const result = await window.flow.plans.create({ projectId, brief, targetDurationSeconds })
+    const result = await window.flow.plans.create({ projectId, mode, brief, targetDurationSeconds })
     set({ planning: false })
 
     if (!result.ok) {
@@ -214,6 +226,57 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return
     }
     set((state) => ({ plans: state.plans.filter((plan) => plan.id !== id) }))
+  },
+
+  renderPlan: async (planId) => {
+    const result = await window.flow.queue.renderPlan({ planId })
+    if (!result.ok) {
+      toast.error('Could not start rendering', result.error)
+      return
+    }
+    set({ queue: result.data })
+  },
+
+  cancelQueue: async () => {
+    const result = await window.flow.queue.cancelAll()
+    if (result.ok) set({ queue: result.data })
+  },
+
+  cancelJob: async (id) => {
+    const result = await window.flow.queue.cancelJob({ id })
+    if (result.ok) set({ queue: result.data })
+  },
+
+  clearSettledJobs: async () => {
+    const result = await window.flow.queue.clearSettled()
+    if (result.ok) set({ queue: result.data })
+  },
+
+  addAccount: async (name) => {
+    const result = await window.flow.accounts.create({ name })
+    if (!result.ok) {
+      toast.error('Could not add the profile', result.error)
+      return
+    }
+    set((state) => ({ accounts: [...state.accounts, result.data] }))
+  },
+
+  renameAccount: async (id, name) => {
+    const result = await window.flow.accounts.rename({ id, name })
+    if (!result.ok) {
+      toast.error('Could not rename the profile', result.error)
+      return
+    }
+    set((state) => ({ accounts: state.accounts.map((account) => (account.id === id ? result.data : account)) }))
+  },
+
+  removeAccount: async (id) => {
+    const result = await window.flow.accounts.remove({ id })
+    if (!result.ok) {
+      toast.error('Could not remove the profile', result.error)
+      return
+    }
+    set((state) => ({ accounts: state.accounts.filter((account) => account.id !== id) }))
   },
 
   setPlannerKey: async (value) => {
@@ -542,6 +605,16 @@ export function subscribeToMainEvents(): () => void {
     window.flow.events.onAccountUpdated((account: Account) => {
       useWorkspaceStore.setState((state) => ({
         accounts: state.accounts.map((item) => (item.id === account.id ? account : item))
+      }))
+    }),
+
+    window.flow.events.onQueueChanged((queue: QueueSnapshot) => {
+      useWorkspaceStore.setState({ queue })
+    }),
+
+    window.flow.events.onPlanUpdated((plan: ScenePlan) => {
+      useWorkspaceStore.setState((state) => ({
+        plans: state.plans.map((item) => (item.id === plan.id ? plan : item))
       }))
     })
   ]

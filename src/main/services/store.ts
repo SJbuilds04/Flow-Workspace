@@ -12,7 +12,7 @@ import type {
   Settings,
   WorkspaceSnapshot
 } from '@shared/types'
-import { DEFAULT_FLOW_MODELS, DEFAULT_PARAMS, DEFAULT_PLANNER_MODEL } from '@shared/types'
+import { ACCOUNT_TONES, DEFAULT_FLOW_MODELS, DEFAULT_PARAMS, DEFAULT_PLANNER_MODEL } from '@shared/types'
 import { FLOW_URL } from './flow-provider'
 
 const STORE_VERSION = 1
@@ -256,6 +256,56 @@ export class WorkspaceStore {
     if (this.data.plans.length === before) return false
     await this.flush()
     return true
+  }
+
+  /** Adds a profile. Each gets its own directory, so sessions stay isolated. */
+  async createAccount(name: string): Promise<Account> {
+    const id = `account-${randomUUID().slice(0, 8)}`
+    const tone = ACCOUNT_TONES[this.data.accounts.length % ACCOUNT_TONES.length] ?? 'green'
+
+    const account: Account = {
+      id,
+      name: name.trim() || `Account ${this.data.accounts.length + 1}`,
+      tone,
+      profileDirectory: id,
+      createdAt: nowIso()
+    }
+
+    this.data.accounts = [...this.data.accounts, account]
+    await this.flush()
+    return account
+  }
+
+  async renameAccount(id: string, name: string): Promise<Account | undefined> {
+    const account = this.findAccount(id)
+    if (!account) return undefined
+    account.name = name.trim() || account.name
+    await this.flush()
+    return { ...account }
+  }
+
+  /** Removes a profile. The caller is responsible for its browser data. */
+  async deleteAccount(id: string): Promise<Account | undefined> {
+    const account = this.findAccount(id)
+    if (!account || this.data.accounts.length <= 1) return undefined
+
+    this.data.accounts = this.data.accounts.filter((item) => item.id !== id)
+
+    if (this.data.settings.activeAccountId === id) {
+      this.data.settings.activeAccountId = this.data.accounts[0]?.id ?? ''
+    }
+
+    await this.flush()
+    return account
+  }
+
+  /** Marks a profile out of credits until the given time, or clears the mark. */
+  async setAccountExhausted(accountId: string, until: string | null): Promise<Account | undefined> {
+    const account = this.findAccount(accountId)
+    if (!account) return undefined
+    account.creditsExhaustedUntil = until
+    await this.flush()
+    return { ...account }
   }
 
   /** Remembers the Flow project a profile generates into. */

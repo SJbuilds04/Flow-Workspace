@@ -154,6 +154,26 @@ test.describe('storyboard with a stored plan', () => {
       .toEqual(['Fog rolls in:true'])
   })
 
+  test('render is blocked until a profile has a Google account', async ({ window }) => {
+    await openStoryboard(window)
+
+    await expect(window.getByText('No profile has a Google account connected yet.')).toBeVisible()
+    await expect(window.getByRole('button', { name: /^Render/ })).toBeDisabled()
+  })
+
+  test('offers both planning modes and swaps the wording', async ({ window }) => {
+    await openStoryboard(window)
+
+    const modes = window.getByRole('radiogroup', { name: 'Planning mode' })
+    await expect(modes.getByRole('radio', { name: 'Generate scenes' })).toBeVisible()
+
+    await modes.getByRole('radio', { name: 'Paste your story' }).click()
+
+    await expect(window.getByText('Your writing is only cut into shots — nothing is invented.')).toBeVisible()
+    await expect(window.getByRole('button', { name: 'Split into scenes' })).toBeVisible()
+    await expect(window.getByRole('textbox', { name: 'Paste your story' })).toBeVisible()
+  })
+
   test('adds a shot and discards the plan', async ({ window, userDataDir }) => {
     await openStoryboard(window)
 

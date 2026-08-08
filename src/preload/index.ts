@@ -7,8 +7,10 @@ import type {
   Generation,
   GenerationProgress,
   GenerationRequest,
+  PlanMode,
   ProfileStatus,
   Project,
+  QueueSnapshot,
   Result,
   ScenePlan,
   Settings,
@@ -54,7 +56,10 @@ const api = {
     signIn: (input: { accountId: string }): Promise<Result<Account>> => invoke(IpcChannels.profileSignIn, input),
     cancelSignIn: (input: { accountId: string }): Promise<Result<{ accountId: string }>> =>
       invoke(IpcChannels.profileSignInCancel, input),
-    signOut: (input: { accountId: string }): Promise<Result<Account>> => invoke(IpcChannels.profileSignOut, input)
+    signOut: (input: { accountId: string }): Promise<Result<Account>> => invoke(IpcChannels.profileSignOut, input),
+    create: (input: { name: string }): Promise<Result<Account>> => invoke(IpcChannels.accountCreate, input),
+    rename: (input: { id: string; name: string }): Promise<Result<Account>> => invoke(IpcChannels.accountRename, input),
+    remove: (input: { id: string }): Promise<Result<{ id: string }>> => invoke(IpcChannels.accountDelete, input)
   },
 
   flow: {
@@ -62,9 +67,22 @@ const api = {
       invoke(IpcChannels.flowDiagnose, input)
   },
 
+  queue: {
+    renderPlan: (input: { planId: string }): Promise<Result<QueueSnapshot>> =>
+      invoke(IpcChannels.queueEnqueuePlan, input),
+    cancelAll: (): Promise<Result<QueueSnapshot>> => invoke(IpcChannels.queueCancelAll),
+    cancelJob: (input: { id: string }): Promise<Result<QueueSnapshot>> => invoke(IpcChannels.queueCancelJob, input),
+    clearSettled: (): Promise<Result<QueueSnapshot>> => invoke(IpcChannels.queueClearSettled),
+    snapshot: (): Promise<Result<QueueSnapshot>> => invoke(IpcChannels.queueSnapshot)
+  },
+
   plans: {
-    create: (input: { projectId: string; brief: string; targetDurationSeconds: number }): Promise<Result<ScenePlan>> =>
-      invoke(IpcChannels.planCreate, input),
+    create: (input: {
+      projectId: string
+      mode: PlanMode
+      brief: string
+      targetDurationSeconds: number
+    }): Promise<Result<ScenePlan>> => invoke(IpcChannels.planCreate, input),
     save: (plan: ScenePlan): Promise<Result<ScenePlan>> => invoke(IpcChannels.planSave, plan),
     remove: (input: { id: string }): Promise<Result<{ id: string }>> => invoke(IpcChannels.planDelete, input)
   },
@@ -112,7 +130,11 @@ const api = {
     onProfileStatus: (listener: (payload: ProfileStatus) => void): Unsubscribe =>
       subscribe(IpcChannels.eventProfileStatus, listener),
     onAccountUpdated: (listener: (payload: Account) => void): Unsubscribe =>
-      subscribe(IpcChannels.eventAccountUpdated, listener)
+      subscribe(IpcChannels.eventAccountUpdated, listener),
+    onQueueChanged: (listener: (payload: QueueSnapshot) => void): Unsubscribe =>
+      subscribe(IpcChannels.eventQueueChanged, listener),
+    onPlanUpdated: (listener: (payload: ScenePlan) => void): Unsubscribe =>
+      subscribe(IpcChannels.eventPlanUpdated, listener)
   }
 } as const
 
