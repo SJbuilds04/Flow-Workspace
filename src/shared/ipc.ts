@@ -36,6 +36,10 @@ export const IpcChannels = {
   queueClearSettled: 'queue:clear-settled',
   queueSnapshot: 'queue:snapshot',
 
+  stitchPlan: 'stitch:plan',
+  stitchStatus: 'stitch:status',
+  stitchReveal: 'stitch:reveal',
+
   generationRun: 'generation:run',
   generationCancel: 'generation:cancel',
   generationDelete: 'generation:delete',
@@ -58,6 +62,7 @@ export const IpcChannels = {
   eventAccountUpdated: 'event:account-updated',
   eventQueueChanged: 'event:queue-changed',
   eventPlanUpdated: 'event:plan-updated',
+  eventProjectUpdated: 'event:project-updated',
   eventWindowState: 'event:window-state'
 } as const
 

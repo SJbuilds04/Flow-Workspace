@@ -23,7 +23,9 @@ import { inspectFlow, type FlowDiagnostics } from './services/flow-provider'
 import { planScenes, PlannerError, PlannerKeyMissingError } from './services/scene-planner'
 import { clearSecret, hasSecret, setSecret, type SecretName } from './services/secrets'
 import { type GenerationEngine } from './services/generation-engine'
-import { fromMediaUrl } from './services/media-url'
+import { fromMediaUrl, toMediaUrl } from './services/media-url'
+import { paths } from './services/paths'
+import { ffmpegVersion, FfmpegMissingError, StitchError, stitchClips } from './services/stitcher'
 import { type ProfileManager, ProfileUnavailableError, SignInAbandonedError } from './services/profile-manager'
 import type { RenderQueue } from './services/render-queue'
 import { type WorkspaceStore } from './services/store'
@@ -267,6 +269,56 @@ export function registerIpc({ store, profiles, engine, queue }: RegisterOptions)
 
   handle<[], QueueSnapshot>(IpcChannels.queueSnapshot, async () => ok(queue.snapshot()))
 
+  // ---------------------------------------------------------------- stitching
+
+  handle<[], { available: boolean; version: string | null }>(IpcChannels.stitchStatus, async () => {
+    const version = await ffmpegVersion()
+    return ok({ available: version !== null, version })
+  })
+
+  handle<[{ planId: string }], Project>(IpcChannels.stitchPlan, async (input) => {
+    const plan = store.findPlan(input.planId)
+    if (!plan) return fail('That storyboard no longer exists.', 'NOT_FOUND')
+
+    const project = store.findProject(plan.projectId)
+    if (!project) return fail('That project no longer exists.', 'NOT_FOUND')
+
+    // Storyboard order is the edit order, so the clips are collected by walking
+    // the scenes rather than by reading the folder.
+    const clips = plan.scenes
+      .map((scene) => (scene.generationId ? store.findGeneration(scene.generationId) : undefined))
+      .map((generation) => generation?.outputPath)
+      .filter((path): path is string => Boolean(path))
+
+    if (clips.length === 0) return fail('Render some shots before joining them.', 'INVALID_INPUT')
+
+    const outputPath = join(paths.outputsFor(project.id), `${slugify(project.name) || 'video'}-final.mp4`)
+
+    try {
+      await stitchClips({ clips, outputPath })
+    } catch (error) {
+      if (error instanceof FfmpegMissingError) return fail(error.message, 'IO_ERROR')
+      if (error instanceof StitchError) return fail(error.message, 'IO_ERROR')
+      throw error
+    }
+
+    const updated = await store.setProjectStitch(project.id, outputPath, toMediaUrl('outputs', outputPath))
+    if (!updated) return fail('That project no longer exists.', 'NOT_FOUND')
+
+    broadcast(IpcChannels.eventProjectUpdated, updated)
+    return ok(updated)
+  })
+
+  handle<[{ projectId: string }], { revealed: boolean }>(IpcChannels.stitchReveal, async (input) => {
+    const project = store.findProject(input.projectId)
+    // Reveal by project id, never by a renderer-supplied path — the renderer
+    // should not be able to point Explorer at arbitrary files.
+    if (!project?.stitchedPath) return fail('There is no assembled video yet.', 'NOT_FOUND')
+
+    shell.showItemInFolder(project.stitchedPath)
+    return ok({ revealed: true })
+  })
+
   // ------------------------------------------------------------ scene planner
 
   handle<[{ projectId: string; mode: PlanMode; brief: string; targetDurationSeconds: number }], ScenePlan>(
@@ -367,10 +419,9 @@ export function registerIpc({ store, profiles, engine, queue }: RegisterOptions)
       attachments,
       engine: store.settings.engine,
       flowUrl: store.settings.flowUrl,
+      flowProjectUrl: project.flowProjects?.[account.id] ?? null,
       onProjectResolved: (projectUrl) => {
-        void store.setAccountFlowProject(account.id, projectUrl).then((updated) => {
-          if (updated) broadcast(IpcChannels.eventAccountUpdated, updated)
-        })
+        void store.setProjectFlowUrl(request.projectId, account.id, projectUrl)
       }
     })
 

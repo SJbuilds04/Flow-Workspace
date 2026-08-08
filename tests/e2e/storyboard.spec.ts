@@ -161,6 +161,23 @@ test.describe('storyboard with a stored plan', () => {
     await expect(window.getByRole('button', { name: /^Render/ })).toBeDisabled()
   })
 
+  test('offers reference slots for the cast and for the overall look', async ({ window }) => {
+    await openStoryboard(window)
+
+    // A photo per character, plus look/location references for the whole video.
+    await expect(window.getByRole('button', { name: 'Set a reference photo for The keeper' })).toBeVisible()
+    await expect(window.getByText('No photo')).toBeVisible()
+    await expect(window.getByRole('button', { name: 'Add reference' })).toBeVisible()
+  })
+
+  test('joining is offered but blocked until shots are rendered', async ({ window }) => {
+    await openStoryboard(window)
+
+    await expect(window.getByText('Join into one video')).toBeVisible()
+    await expect(window.getByText('No shots rendered yet.')).toBeVisible()
+    await expect(window.getByRole('button', { name: /^Join/ })).toBeDisabled()
+  })
+
   test('offers both planning modes and swaps the wording', async ({ window }) => {
     await openStoryboard(window)
 

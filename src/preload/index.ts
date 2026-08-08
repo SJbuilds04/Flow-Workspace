@@ -76,6 +76,13 @@ const api = {
     snapshot: (): Promise<Result<QueueSnapshot>> => invoke(IpcChannels.queueSnapshot)
   },
 
+  stitch: {
+    status: (): Promise<Result<{ available: boolean; version: string | null }>> => invoke(IpcChannels.stitchStatus),
+    plan: (input: { planId: string }): Promise<Result<Project>> => invoke(IpcChannels.stitchPlan, input),
+    reveal: (input: { projectId: string }): Promise<Result<{ revealed: boolean }>> =>
+      invoke(IpcChannels.stitchReveal, input)
+  },
+
   plans: {
     create: (input: {
       projectId: string
@@ -134,7 +141,9 @@ const api = {
     onQueueChanged: (listener: (payload: QueueSnapshot) => void): Unsubscribe =>
       subscribe(IpcChannels.eventQueueChanged, listener),
     onPlanUpdated: (listener: (payload: ScenePlan) => void): Unsubscribe =>
-      subscribe(IpcChannels.eventPlanUpdated, listener)
+      subscribe(IpcChannels.eventPlanUpdated, listener),
+    onProjectUpdated: (listener: (payload: Project) => void): Unsubscribe =>
+      subscribe(IpcChannels.eventProjectUpdated, listener)
   }
 } as const
 

@@ -16,8 +16,10 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { Modal } from '@/components/ui/Modal'
 import { SegmentedControl } from '@/components/composer/SegmentedControl'
 import { useWorkspaceStore } from '@/store/workspace-store'
+import { ReferencePanel } from './ReferencePanel'
 import { RenderBar } from './RenderBar'
 import { SceneCard } from './SceneCard'
+import { StitchBar } from './StitchBar'
 
 interface StoryboardViewProps {
   projectId: string
@@ -172,7 +174,9 @@ export function StoryboardView({ projectId }: StoryboardViewProps): ReactNode {
       {plan ? (
         <>
           <PlanSummary plan={plan} onDelete={() => void deletePlan(plan.id)} />
+          <ReferencePanel plan={plan} onChange={update} />
           <RenderBar plan={plan} />
+          <StitchBar plan={plan} />
 
           <div className="space-y-3">
             <AnimatePresence initial={false}>

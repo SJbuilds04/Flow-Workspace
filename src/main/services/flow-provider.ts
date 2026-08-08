@@ -79,6 +79,10 @@ export interface FlowRunOptions {
   entryUrl: string
   /** A previously resolved Flow project to reuse, skipping the whole entrance. */
   projectUrl?: string | null
+  /** Filename stem for the artifacts; falls back to the generation id. */
+  outputBasename?: string
+  /** Local image paths to upload and condition this shot on. */
+  referenceImagePaths?: string[]
   report: (stage: string, progress: number) => void
   throwIfCancelled: () => void
 }
@@ -104,8 +108,19 @@ export interface FlowRunResult {
  * of the 16:9 control is literally "crop_16_916:9".
  */
 export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRunResult> {
-  const { context, params, prompt, generationId, outputDirectory, entryUrl, projectUrl, report, throwIfCancelled } =
-    options
+  const {
+    context,
+    params,
+    prompt,
+    generationId,
+    outputDirectory,
+    entryUrl,
+    projectUrl,
+    outputBasename,
+    referenceImagePaths,
+    report,
+    throwIfCancelled
+  } = options
 
   const page = await context.newPage()
 
@@ -134,6 +149,12 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
     await applyAgentSettings(page, params)
     throwIfCancelled()
 
+    if (referenceImagePaths && referenceImagePaths.length > 0) {
+      report('Uploading reference images', 0.3)
+      await attachReferenceImages(page, referenceImagePaths)
+      throwIfCancelled()
+    }
+
     report('Writing the prompt', 0.34)
     await submitPrompt(page, prompt, params)
     throwIfCancelled()
@@ -146,7 +167,13 @@ export async function runFlowGeneration(options: FlowRunOptions): Promise<FlowRu
     const mediaUrls = await waitForResults(page, params, { throwIfCancelled, report })
 
     report('Downloading results', 0.88)
-    const outputs = await downloadResults({ page, mediaUrls, generationId, outputDirectory, params })
+    const outputs = await downloadResults({
+      page,
+      mediaUrls,
+      outputDirectory,
+      params,
+      basename: outputBasename ?? generationId
+    })
 
     return { outputs, projectUrl: page.url() }
   } finally {
@@ -341,6 +368,31 @@ async function applyAgentSettings(page: Page, params: GenerationParams): Promise
 }
 
 /**
+ * Uploads reference images so the shot is conditioned on them.
+ *
+ * Flow keeps a hidden `input[type=file][accept=image/*][multiple]` on the
+ * project page, which is the whole upload mechanism — setting files on it
+ * directly avoids driving a native file picker, which Playwright cannot see
+ * into and which differs per platform.
+ *
+ * Best-effort: a shot rendered without its references is worse, but far better
+ * than a run that fails outright.
+ */
+async function attachReferenceImages(page: Page, paths: string[]): Promise<boolean> {
+  try {
+    const input = page.locator('input[type="file"][accept*="image"]').first()
+    if ((await input.count()) === 0) return false
+
+    await input.setInputFiles(paths, { timeout: 30_000 })
+    // Uploads are async; the thumbnail has to land before the prompt is sent.
+    await page.waitForTimeout(6000)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Flow's composer is an agent, not a form: duration and output type are not
  * exposed as controls next to the prompt, so they are stated in the request.
  */
@@ -502,11 +554,11 @@ async function probeDownloadable(page: Page, urls: string[]): Promise<string[]> 
 async function downloadResults(args: {
   page: Page
   mediaUrls: string[]
-  generationId: string
   outputDirectory: string
   params: GenerationParams
+  basename: string
 }): Promise<GenerationOutput[]> {
-  const { page, mediaUrls, generationId, outputDirectory, params } = args
+  const { page, mediaUrls, outputDirectory, params, basename } = args
   await mkdir(outputDirectory, { recursive: true })
 
   const extension = params.mode === 'video' ? 'mp4' : 'png'
@@ -529,7 +581,7 @@ async function downloadResults(args: {
     }, mediaUrl)
 
     const suffix = mediaUrls.length > 1 ? `-${index + 1}` : ''
-    const path = join(outputDirectory, `${generationId}${suffix}.${extension}`)
+    const path = join(outputDirectory, `${basename}${suffix}.${extension}`)
     await writeFile(path, Buffer.from(base64, 'base64'))
 
     const output: GenerationOutput = { path, url: toMediaUrl('outputs', path), kind: params.mode }
@@ -537,7 +589,7 @@ async function downloadResults(args: {
     // Flow gives no poster image, and a video card with no frame reads as
     // unfinished. Grab one from the clip itself.
     if (params.mode === 'video') {
-      const posterPath = join(outputDirectory, `${generationId}${suffix}-poster.jpg`)
+      const posterPath = join(outputDirectory, `${basename}${suffix}-poster.jpg`)
       if (await capturePoster(page, mediaUrl, posterPath)) {
         output.thumbnailUrl = toMediaUrl('outputs', posterPath)
       }
