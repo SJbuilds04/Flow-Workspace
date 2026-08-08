@@ -67,6 +67,11 @@ jobs:
       - name: Install Playwright system dependencies
         run: npx playwright install --with-deps chromium
 
+      # The app shells out to FFmpeg for stitching, so the runner should have
+      # it — otherwise CI exercises a different code path than a real install.
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Build
         run: npx electron-vite build
 
