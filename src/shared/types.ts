@@ -117,6 +117,66 @@ export interface AttachmentRef {
 
 export type GenerationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
+/**
+ * A recurring subject. Flow supports these natively — you define a character
+ * once and reference it with an `@tag` — so the planner names them and later
+ * phases cast them into each scene rather than re-describing them every time.
+ */
+export interface Character {
+  id: string
+  /** Used verbatim as Flow's `@tag`, so it must stay a single token. */
+  tag: string
+  name: string
+  description: string
+  createdAt: string
+}
+
+export type SceneStatus = 'planned' | 'queued' | 'running' | 'completed' | 'failed'
+
+export interface Scene {
+  id: string
+  title: string
+  /** The prompt this scene is generated from. */
+  prompt: string
+  durationSeconds: VideoDuration
+  /** `tag` values of the characters appearing in this shot. */
+  characterTags: string[]
+  status: SceneStatus
+  /** Set once a generation has rendered this scene. */
+  generationId?: string
+  /**
+   * Approved shots are skipped by "generate remaining", so a good take is
+   * never burned by a re-run.
+   */
+  locked: boolean
+}
+
+/** An ordered set of shots that add up to one finished video. */
+export interface ScenePlan {
+  id: string
+  projectId: string
+  /** What the user asked for, kept so the plan can be regenerated. */
+  brief: string
+  targetDurationSeconds: number
+  aspectRatio: FlowAspectRatio
+  scenes: Scene[]
+  characters: Character[]
+  /** Which model produced the plan, for reproducibility. */
+  plannerModel: string
+  createdAt: string
+  updatedAt: string
+}
+
+export const PLAN_TARGET_DURATIONS: readonly number[] = [15, 30, 60, 90, 120] as const
+
+/** Starting point only — the model id is editable, since providers rotate them. */
+export const DEFAULT_PLANNER_MODEL = 'llama-3.3-70b-versatile'
+
+/** Total runtime of a plan, in seconds. */
+export function planDuration(plan: Pick<ScenePlan, 'scenes'>): number {
+  return plan.scenes.reduce((total, scene) => total + scene.durationSeconds, 0)
+}
+
 /** The knobs Flow's generation panel exposes, in one place. */
 export interface GenerationParams {
   mode: GenerationMode
@@ -203,6 +263,12 @@ export interface Settings {
   flowModels: string[]
   /** Where the Flow automation starts. Configurable because Google moves it. */
   flowUrl: string
+  /**
+   * Groq model used for scene planning. Free text for the same reason Flow's
+   * model names are: providers rotate them, and a wrong value should be a
+   * settings edit rather than a release.
+   */
+  plannerModel: string
   defaults: GenerationParams
   reduceMotion: boolean
   /** Launch the browser context with a visible window instead of headless. */
@@ -215,6 +281,7 @@ export interface WorkspaceSnapshot {
   projects: Project[]
   accounts: Account[]
   generations: Generation[]
+  plans: ScenePlan[]
   settings: Settings
 }
 
@@ -222,6 +289,8 @@ export interface WorkspaceSnapshot {
 export interface WorkspaceBootstrap extends WorkspaceSnapshot {
   profileStatuses: ProfileStatus[]
   platform: 'darwin' | 'win32' | 'linux' | 'other'
+  /** Whether a Groq key is stored, never the key itself. */
+  hasPlannerKey: boolean
 }
 
 /** Discriminated result so IPC never throws across the bridge. */

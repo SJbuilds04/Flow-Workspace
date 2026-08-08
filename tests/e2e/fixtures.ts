@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
-import type { Account, AccountIdentity, Settings } from '@shared/types'
+import type { Account, AccountIdentity, Project, ScenePlan, Settings } from '@shared/types'
 
 /**
  * Mirrors the store's default accounts. Seeding writes a workspace file *before*
@@ -34,6 +34,21 @@ interface FlowOptions {
    * `{ engine: 'local-preview' }` so they never reach out to labs.google.
    */
   seedSettings: Partial<Settings> | null
+
+  /**
+   * Extra environment for the app process. Mainly `GROQ_API_KEY`, which the
+   * planner reads before the keychain — so key-gated UI is reachable without
+   * a real secret.
+   */
+  seedEnv: Record<string, string> | null
+
+  /**
+   * Projects and storyboards to write before launch. The main process keeps
+   * the workspace in memory, so anything written after the app starts is
+   * invisible to it and gets overwritten on the next save.
+   */
+  seedProjects: Project[] | null
+  seedPlans: ScenePlan[] | null
 }
 
 interface FlowFixtures {
@@ -52,6 +67,9 @@ interface FlowFixtures {
 export const test = base.extend<FlowOptions & FlowFixtures>({
   seedIdentities: [null, { option: true }],
   seedSettings: [null, { option: true }],
+  seedEnv: [null, { option: true }],
+  seedProjects: [null, { option: true }],
+  seedPlans: [null, { option: true }],
 
   userDataDir: async ({}, use) => {
     const directory = await mkdtemp(join(tmpdir(), 'flow-workspace-e2e-'))
@@ -59,8 +77,8 @@ export const test = base.extend<FlowOptions & FlowFixtures>({
     await rm(directory, { recursive: true, force: true }).catch(() => undefined)
   },
 
-  app: async ({ userDataDir, seedIdentities, seedSettings }, use) => {
-    if (seedIdentities || seedSettings) {
+  app: async ({ userDataDir, seedIdentities, seedSettings, seedEnv, seedProjects, seedPlans }, use) => {
+    if (seedIdentities || seedSettings || seedProjects || seedPlans) {
       const accounts = defaultAccounts().map((account) => {
         const identity = seedIdentities?.[account.id]
         return identity ? { ...account, identity } : account
@@ -68,7 +86,17 @@ export const test = base.extend<FlowOptions & FlowFixtures>({
       // Anything omitted is filled in by the store's own migration step.
       await writeFile(
         join(userDataDir, 'workspace.json'),
-        JSON.stringify({ version: 1, accounts, ...(seedSettings ? { settings: seedSettings } : {}) }, null, 2),
+        JSON.stringify(
+          {
+            version: 1,
+            accounts,
+            ...(seedProjects ? { projects: seedProjects } : {}),
+            ...(seedPlans ? { plans: seedPlans } : {}),
+            ...(seedSettings ? { settings: seedSettings } : {})
+          },
+          null,
+          2
+        ),
         'utf-8'
       )
     }
@@ -82,6 +110,7 @@ export const test = base.extend<FlowOptions & FlowFixtures>({
       env[key] = value
     }
     env['NODE_ENV'] = 'test'
+    Object.assign(env, seedEnv ?? {})
 
     const app = await electron.launch({
       args: ['.', `--user-data-dir=${userDataDir}`],

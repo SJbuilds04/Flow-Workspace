@@ -12,11 +12,14 @@ import type {
   Project,
   Result,
   ResultCode,
+  ScenePlan,
   Settings,
   WorkspaceBootstrap
 } from '@shared/types'
 import { pickAttachment, removeAttachment } from './services/attachments'
 import { inspectFlow, type FlowDiagnostics } from './services/flow-provider'
+import { planScenes, PlannerError, PlannerKeyMissingError } from './services/scene-planner'
+import { clearSecret, hasSecret, setSecret, type SecretName } from './services/secrets'
 import { type GenerationEngine } from './services/generation-engine'
 import { fromMediaUrl } from './services/media-url'
 import { type ProfileManager, ProfileUnavailableError, SignInAbandonedError } from './services/profile-manager'
@@ -87,7 +90,8 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
     return ok({
       ...snapshot,
       profileStatuses: profiles.allStatuses(snapshot.accounts),
-      platform: currentPlatform()
+      platform: currentPlatform(),
+      hasPlannerKey: await hasSecret('groqApiKey')
     })
   })
 
@@ -193,6 +197,61 @@ export function registerIpc({ store, profiles, engine }: RegisterOptions): void 
 
     return ok({ ...diagnostics, reportPath })
   })
+
+  // ------------------------------------------------------------ scene planner
+
+  handle<[{ projectId: string; brief: string; targetDurationSeconds: number }], ScenePlan>(
+    IpcChannels.planCreate,
+    async (input) => {
+      const project = store.findProject(input.projectId)
+      if (!project) return fail('That project no longer exists.', 'NOT_FOUND')
+
+      try {
+        const plan = await planScenes({
+          projectId: input.projectId,
+          brief: input.brief,
+          targetDurationSeconds: input.targetDurationSeconds,
+          aspectRatio: store.settings.defaults.aspectRatio,
+          model: store.settings.plannerModel
+        })
+        return ok(await store.savePlan(plan))
+      } catch (error) {
+        if (error instanceof PlannerKeyMissingError) return fail(error.message, 'INVALID_INPUT')
+        if (error instanceof PlannerError) return fail(error.message, 'UNKNOWN')
+        throw error
+      }
+    }
+  )
+
+  handle<[ScenePlan], ScenePlan>(IpcChannels.planSave, async (plan) => {
+    if (!store.findProject(plan.projectId)) return fail('That project no longer exists.', 'NOT_FOUND')
+    return ok(await store.savePlan(plan))
+  })
+
+  handle<[{ id: string }], { id: string }>(IpcChannels.planDelete, async (input) => {
+    const removed = await store.deletePlan(input.id)
+    return removed ? ok({ id: input.id }) : fail('That plan no longer exists.', 'NOT_FOUND')
+  })
+
+  // --------------------------------------------------------------- api tokens
+
+  handle<[{ name: SecretName; value: string }], { stored: boolean }>(IpcChannels.secretSet, async (input) => {
+    try {
+      await setSecret(input.name, input.value)
+      return ok({ stored: await hasSecret(input.name) })
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error), 'IO_ERROR')
+    }
+  })
+
+  handle<[{ name: SecretName }], { stored: boolean }>(IpcChannels.secretClear, async (input) => {
+    await clearSecret(input.name)
+    return ok({ stored: false })
+  })
+
+  handle<[{ name: SecretName }], { stored: boolean }>(IpcChannels.secretStatus, async (input) =>
+    ok({ stored: await hasSecret(input.name) })
+  )
 
   // -------------------------------------------------------------- attachments
 

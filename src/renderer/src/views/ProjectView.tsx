@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
-import { Check, FolderPlus, Pencil } from 'lucide-react'
+import { Check, FolderPlus, ListVideo, Pencil, Wand } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { formatRelative } from '@/lib/format'
 import { Button } from '@/components/ui/Button'
@@ -8,7 +8,9 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { IconButton } from '@/components/ui/IconButton'
 import { ProfileNotice } from '@/components/account/ProfileNotice'
 import { PromptComposer } from '@/components/composer/PromptComposer'
+import { SegmentedControl } from '@/components/composer/SegmentedControl'
 import { GenerationGrid } from '@/components/history/GenerationGrid'
+import { StoryboardView } from '@/components/storyboard/StoryboardView'
 import { emptyDraft, useWorkspaceStore } from '@/store/workspace-store'
 
 export function ProjectView(): ReactNode {
@@ -19,6 +21,8 @@ export function ProjectView(): ReactNode {
   const settings = useWorkspaceStore((state) => state.settings)
   const activeRun = useWorkspaceStore((state) => state.activeRun)
   const renameProject = useWorkspaceStore((state) => state.renameProject)
+  const projectTab = useWorkspaceStore((state) => state.projectTab)
+  const setProjectTab = useWorkspaceStore((state) => state.setProjectTab)
 
   const project = projects.find((item) => item.id === activeProjectId) ?? null
 
@@ -54,23 +58,43 @@ export function ProjectView(): ReactNode {
           onRename={(name) => void renameProject(project.id, name)}
         />
 
-        <div className="mt-8">
-          <ProfileNotice />
-          <PromptComposer projectId={project.id} draft={draft} run={run} />
+        <div className="mt-7">
+          <SegmentedControl
+            label="Project mode"
+            value={projectTab}
+            onChange={setProjectTab}
+            options={[
+              { value: 'compose', label: 'Compose', icon: <Wand className="size-3.5" aria-hidden /> },
+              { value: 'storyboard', label: 'Storyboard', icon: <ListVideo className="size-3.5" aria-hidden /> }
+            ]}
+          />
         </div>
 
-        <section className="mt-14" aria-label="Generation history">
-          <div className="mb-5 flex items-baseline justify-between gap-4">
-            <h2 className="text-sm font-medium tracking-tight text-ink">History</h2>
-            {projectGenerations.length > 0 && (
-              <span className="text-2xs tabular-nums text-ink-ghost">
-                {projectGenerations.length} generation{projectGenerations.length === 1 ? '' : 's'}
-              </span>
-            )}
+        {projectTab === 'storyboard' ? (
+          <div className="mt-6">
+            <StoryboardView projectId={project.id} />
           </div>
+        ) : (
+          <>
+            <div className="mt-6">
+              <ProfileNotice />
+              <PromptComposer projectId={project.id} draft={draft} run={run} />
+            </div>
 
-          <GenerationGrid generations={projectGenerations} busy={Boolean(run)} />
-        </section>
+            <section className="mt-14" aria-label="Generation history">
+              <div className="mb-5 flex items-baseline justify-between gap-4">
+                <h2 className="text-sm font-medium tracking-tight text-ink">History</h2>
+                {projectGenerations.length > 0 && (
+                  <span className="text-2xs tabular-nums text-ink-ghost">
+                    {projectGenerations.length} generation{projectGenerations.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+
+              <GenerationGrid generations={projectGenerations} busy={Boolean(run)} />
+            </section>
+          </>
+        )}
       </div>
     </div>
   )

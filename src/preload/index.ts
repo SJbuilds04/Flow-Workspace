@@ -10,6 +10,7 @@ import type {
   ProfileStatus,
   Project,
   Result,
+  ScenePlan,
   Settings,
   WorkspaceBootstrap
 } from '@shared/types'
@@ -59,6 +60,23 @@ const api = {
   flow: {
     diagnose: (input: { accountId: string }): Promise<Result<FlowDiagnosticsReport>> =>
       invoke(IpcChannels.flowDiagnose, input)
+  },
+
+  plans: {
+    create: (input: { projectId: string; brief: string; targetDurationSeconds: number }): Promise<Result<ScenePlan>> =>
+      invoke(IpcChannels.planCreate, input),
+    save: (plan: ScenePlan): Promise<Result<ScenePlan>> => invoke(IpcChannels.planSave, plan),
+    remove: (input: { id: string }): Promise<Result<{ id: string }>> => invoke(IpcChannels.planDelete, input)
+  },
+
+  secrets: {
+    /** The value crosses once, on the way in. It is never read back out. */
+    set: (input: { name: 'groqApiKey'; value: string }): Promise<Result<{ stored: boolean }>> =>
+      invoke(IpcChannels.secretSet, input),
+    clear: (input: { name: 'groqApiKey' }): Promise<Result<{ stored: boolean }>> =>
+      invoke(IpcChannels.secretClear, input),
+    status: (input: { name: 'groqApiKey' }): Promise<Result<{ stored: boolean }>> =>
+      invoke(IpcChannels.secretStatus, input)
   },
 
   attachments: {

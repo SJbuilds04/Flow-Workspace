@@ -1,10 +1,18 @@
-import { app } from 'electron'
+﻿import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { Account, AccountIdentity, Generation, Project, Settings, WorkspaceSnapshot } from '@shared/types'
-import { DEFAULT_FLOW_MODELS, DEFAULT_PARAMS } from '@shared/types'
+import type {
+  Account,
+  AccountIdentity,
+  Generation,
+  Project,
+  ScenePlan,
+  Settings,
+  WorkspaceSnapshot
+} from '@shared/types'
+import { DEFAULT_FLOW_MODELS, DEFAULT_PARAMS, DEFAULT_PLANNER_MODEL } from '@shared/types'
 import { FLOW_URL } from './flow-provider'
 
 const STORE_VERSION = 1
@@ -32,6 +40,7 @@ function defaultSettings(): Settings {
     engine: 'google-flow',
     flowModels: [...DEFAULT_FLOW_MODELS],
     flowUrl: FLOW_URL,
+    plannerModel: DEFAULT_PLANNER_MODEL,
     defaults: { ...DEFAULT_PARAMS },
     reduceMotion: false,
     showBrowserWindow: false,
@@ -54,6 +63,7 @@ function defaultSnapshot(): PersistedShape {
     ],
     accounts: defaultAccounts(),
     generations: [],
+    plans: [],
     settings: defaultSettings()
   }
 }
@@ -124,6 +134,7 @@ export class WorkspaceStore {
       projects: parsed.projects?.length ? parsed.projects : base.projects,
       accounts,
       generations: parsed.generations ?? [],
+      plans: parsed.plans ?? [],
       settings
     }
   }
@@ -133,6 +144,7 @@ export class WorkspaceStore {
       projects: [...this.data.projects],
       accounts: [...this.data.accounts],
       generations: [...this.data.generations],
+      plans: [...this.data.plans],
       settings: { ...this.data.settings }
     }
   }
@@ -184,6 +196,7 @@ export class WorkspaceStore {
     const before = this.data.projects.length
     this.data.projects = this.data.projects.filter((project) => project.id !== id)
     this.data.generations = this.data.generations.filter((generation) => generation.projectId !== id)
+    this.data.plans = this.data.plans.filter((plan) => plan.projectId !== id)
     if (this.data.projects.length === before) return false
     await this.flush()
     return true
@@ -219,6 +232,30 @@ export class WorkspaceStore {
     account.identity = identity
     await this.flush()
     return { ...account }
+  }
+
+  get plans(): ScenePlan[] {
+    return [...this.data.plans]
+  }
+
+  findPlan(id: string): ScenePlan | undefined {
+    return this.data.plans.find((plan) => plan.id === id)
+  }
+
+  /** One plan per project: a second plan replaces the first. */
+  async savePlan(plan: ScenePlan): Promise<ScenePlan> {
+    const next = { ...plan, updatedAt: new Date().toISOString() }
+    this.data.plans = [next, ...this.data.plans.filter((item) => item.projectId !== plan.projectId)]
+    await this.flush()
+    return next
+  }
+
+  async deletePlan(id: string): Promise<boolean> {
+    const before = this.data.plans.length
+    this.data.plans = this.data.plans.filter((plan) => plan.id !== id)
+    if (this.data.plans.length === before) return false
+    await this.flush()
+    return true
   }
 
   /** Remembers the Flow project a profile generates into. */

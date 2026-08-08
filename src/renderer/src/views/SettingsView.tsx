@@ -86,6 +86,23 @@ export function SettingsView(): ReactNode {
           <FlowEntryEditor url={settings.flowUrl} />
         </Section>
 
+        <Section
+          title="Scene planner"
+          description="Groq splits a brief into individual shots. Planning costs no Flow credits — only rendering does."
+        >
+          <PlannerKeyEditor />
+
+          <Field label="Planner model">
+            <TextField
+              value={settings.plannerModel}
+              aria-label="Planner model"
+              spellCheck={false}
+              containerClassName="w-56"
+              onChange={(event) => void updateSettings({ plannerModel: event.target.value })}
+            />
+          </Field>
+        </Section>
+
         <Section title="Defaults" description="Applied to every new project and every cleared prompt.">
           <Field label="Aspect ratio">
             <select
@@ -237,6 +254,67 @@ function ModelListEditor({ models }: { models: string[] }): ReactNode {
         <Button variant="secondary" size="sm" iconLeft={<Plus className="size-3.5" />} onClick={add}>
           Add
         </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The key crosses the bridge once, on the way in, and is stored encrypted by
+ * the OS keychain. It is never read back out to the renderer — the UI only
+ * ever learns whether one exists.
+ */
+function PlannerKeyEditor(): ReactNode {
+  const hasKey = useWorkspaceStore((state) => state.hasPlannerKey)
+  const setPlannerKey = useWorkspaceStore((state) => state.setPlannerKey)
+  const clearPlannerKey = useWorkspaceStore((state) => state.clearPlannerKey)
+
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const save = async (): Promise<void> => {
+    if (!value.trim() || saving) return
+    setSaving(true)
+    const stored = await setPlannerKey(value)
+    setSaving(false)
+    if (stored) setValue('')
+  }
+
+  return (
+    <div className="rounded-2xl border border-edge-subtle bg-surface-1 px-4 py-3.5">
+      <p className="flex items-center gap-2 text-sm text-ink">
+        Groq API key
+        {hasKey && (
+          <span className="rounded-md bg-success-soft px-1.5 py-0.5 text-2xs font-medium text-success">Saved</span>
+        )}
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+        Stored encrypted by your OS keychain, never in the workspace file.{' '}
+        <code className="text-ink-ghost">GROQ_API_KEY</code> in the environment takes precedence if set.
+      </p>
+
+      <div className="mt-3 flex items-center gap-2">
+        <TextField
+          type="password"
+          value={value}
+          aria-label="Groq API key"
+          spellCheck={false}
+          autoComplete="off"
+          placeholder={hasKey ? 'Replace the saved key' : 'gsk_…'}
+          containerClassName="flex-1"
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void save()
+          }}
+        />
+        <Button variant="secondary" size="sm" loading={saving} disabled={!value.trim()} onClick={save}>
+          Save
+        </Button>
+        {hasKey && (
+          <Button variant="ghost" size="sm" onClick={() => void clearPlannerKey()}>
+            Remove
+          </Button>
+        )}
       </div>
     </div>
   )
