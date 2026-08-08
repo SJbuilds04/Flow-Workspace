@@ -38,7 +38,6 @@ export interface Account {
    * creation — and so the account does not collect a new Flow project per
    * generation.
    */
-  flowProjectUrl?: string | null
   /**
    * Set when Flow reported this account out of credits. The queue skips it
    * until then, so a exhausted profile does not keep swallowing jobs. Flow's
@@ -65,6 +64,18 @@ export interface Project {
   name: string
   /** Emoji or short glyph rendered in the sidebar. */
   glyph: string
+  /**
+   * The Flow project this one's work goes into, per account.
+   *
+   * Keyed by account because Flow data cannot cross Google accounts, and by
+   * app project so each video keeps its own Flow workspace — its own session
+   * history, its own media, and its own characters, which is what stops a
+   * cast from one video leaking into the next.
+   */
+  flowProjects?: Record<string, string>
+  /** Path of the stitched video, once the shots have been joined. */
+  stitchedPath?: string | null
+  stitchedUrl?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -136,6 +147,8 @@ export interface Character {
   tag: string
   name: string
   description: string
+  /** A photo to anchor the look. Far stronger than description alone. */
+  referenceImage?: AttachmentRef | null
   createdAt: string
 }
 
@@ -179,6 +192,12 @@ export interface ScenePlan {
   aspectRatio: FlowAspectRatio
   scenes: Scene[]
   characters: Character[]
+  /**
+   * Location, palette and film-look references applied to every shot. These
+   * are not characters, so Flow's character feature cannot hold them — they
+   * ride along as reference images instead.
+   */
+  styleReferences: AttachmentRef[]
   /** Which model produced the plan, for reproducibility. */
   plannerModel: string
   createdAt: string
@@ -239,6 +258,14 @@ export interface GenerationRequest extends GenerationParams {
   projectId: string
   accountId: string
   prompt: string
+  /**
+   * Filename stem for the artifacts, e.g. `scene-03-fog-rolls-in`. Without it
+   * files are named by generation id, which is unreadable once you are looking
+   * at a folder of shots that need to be assembled in order.
+   */
+  outputBasename?: string
+  /** Reference images to condition this shot on. */
+  referenceImages?: AttachmentRef[]
   /** Already-imported files, as returned by the attachment picker. */
   referenceImage?: AttachmentRef | null
   referenceVideo?: AttachmentRef | null

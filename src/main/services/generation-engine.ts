@@ -37,6 +37,8 @@ interface RunOptions {
   attachments: AttachmentRef[]
   engine: GenerationEngineId
   flowUrl: string
+  /** The Flow project this app project uses on this account, if known. */
+  flowProjectUrl?: string | null
   /** Called when a run settles on a Flow project worth reusing next time. */
   onProjectResolved?: (projectUrl: string) => void
   /**
@@ -83,6 +85,7 @@ export class GenerationEngine extends EventEmitter {
     attachments,
     engine,
     flowUrl,
+    flowProjectUrl,
     onProjectResolved,
     onProgress
   }: RunOptions): Promise<Generation> {
@@ -137,13 +140,17 @@ export class GenerationEngine extends EventEmitter {
           generationId: generation.id,
           outputDirectory,
           entryUrl: flowUrl,
-          projectUrl: account.flowProjectUrl ?? null,
+          projectUrl: flowProjectUrl ?? null,
+          ...(request.outputBasename ? { outputBasename: request.outputBasename } : {}),
+          ...(request.referenceImages?.length
+            ? { referenceImagePaths: request.referenceImages.map((image) => image.path) }
+            : {}),
           report,
           throwIfCancelled
         })
         generation.outputs = result.outputs
         if (result.creditsUsed !== undefined) generation.creditsUsed = result.creditsUsed
-        if (result.projectUrl && result.projectUrl !== account.flowProjectUrl) {
+        if (result.projectUrl && result.projectUrl !== flowProjectUrl) {
           onProjectResolved?.(result.projectUrl)
         }
       } else {

@@ -1,10 +1,35 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import type { Account, Character, Generation, QueueSnapshot, RenderJob, Scene, ScenePlan } from '@shared/types'
+import type {
+  Account,
+  AttachmentRef,
+  Character,
+  Generation,
+  QueueSnapshot,
+  RenderJob,
+  Scene,
+  ScenePlan
+} from '@shared/types'
 import { FlowCreditsExhaustedError } from './flow-provider'
 import type { GenerationEngine } from './generation-engine'
 import { buildScenePrompt } from './scene-prompt'
 import type { WorkspaceStore } from './store'
+
+/**
+ * `scene-03-fog-rolls-in` — zero-padded so a folder of shots sorts into
+ * playing order, which is what makes the stitch step trivial and the files
+ * readable by hand.
+ */
+export function sceneBasename(index: number, title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+
+  const number = String(index + 1).padStart(2, '0')
+  return slug ? `scene-${number}-${slug}` : `scene-${number}`
+}
 
 /** Credits reset daily, so an exhausted profile is parked until tomorrow. */
 function nextReset(): string {
@@ -184,6 +209,18 @@ export class RenderQueue extends EventEmitter {
     await this.setSceneStatus(plan.id, scene.id, { status: 'running' })
 
     const settings = this.deps.store.settings
+    const index = plan.scenes.findIndex((item) => item.id === scene.id)
+
+    // Character photos for whoever is in this shot, plus the look references
+    // that apply to the whole video.
+    const references = [
+      ...plan.characters
+        .filter((character) => scene.characterTags.includes(character.tag))
+        .map((character) => character.referenceImage)
+        .filter((image): image is AttachmentRef => Boolean(image)),
+      ...(plan.styleReferences ?? [])
+    ]
+
     const generation = await this.deps.engine.run({
       request: {
         projectId: job.projectId,
@@ -194,14 +231,17 @@ export class RenderQueue extends EventEmitter {
         aspectRatio: plan.aspectRatio,
         model: settings.defaults.model,
         durationSeconds: scene.durationSeconds,
-        outputCount: 1
+        outputCount: 1,
+        outputBasename: sceneBasename(index, scene.title),
+        referenceImages: references
       },
       account,
       attachments: [],
       engine: settings.engine,
       flowUrl: settings.flowUrl,
+      flowProjectUrl: this.deps.store.findProject(job.projectId)?.flowProjects?.[account.id] ?? null,
       onProjectResolved: (projectUrl) => {
-        void this.deps.store.setAccountFlowProject(account.id, projectUrl)
+        void this.deps.store.setProjectFlowUrl(job.projectId, account.id, projectUrl)
       },
       onProgress: (progress) => {
         this.patch(jobId, { stage: `${account.name}: ${progress.stage}`, generationId: progress.generationId })

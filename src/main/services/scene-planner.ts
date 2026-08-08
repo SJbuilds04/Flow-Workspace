@@ -266,6 +266,7 @@ function buildPlan(request: PlanRequest, raw: RawPlan): ScenePlan {
     aspectRatio: request.aspectRatio,
     scenes,
     characters,
+    styleReferences: [],
     plannerModel: request.model,
     createdAt,
     updatedAt: createdAt

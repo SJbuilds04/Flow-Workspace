@@ -78,6 +78,8 @@ interface WorkspaceState {
   renameAccount: (id: string, name: string) => Promise<void>
   removeAccount: (id: string) => Promise<void>
   savePlan: (plan: ScenePlan) => Promise<void>
+  pickReferenceImage: () => Promise<AttachmentRef | null>
+  stitchPlan: (planId: string) => Promise<void>
   deletePlan: (id: string) => Promise<void>
   setPlannerKey: (value: string) => Promise<boolean>
   clearPlannerKey: () => Promise<void>
@@ -217,6 +219,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return
     }
     set((state) => ({ plans: state.plans.map((item) => (item.id === plan.id ? result.data : item)) }))
+  },
+
+  pickReferenceImage: async () => {
+    const result = await window.flow.attachments.pick({ kind: 'image' })
+    if (!result.ok) {
+      toast.error('Could not read that image', result.error)
+      return null
+    }
+    return result.data
+  },
+
+  stitchPlan: async (planId) => {
+    const result = await window.flow.stitch.plan({ planId })
+    if (!result.ok) {
+      toast.error('Could not join the shots', result.error)
+      return
+    }
+
+    set((state) => ({
+      projects: state.projects.map((project) => (project.id === result.data.id ? result.data : project))
+    }))
+    toast.success('Video assembled', result.data.stitchedPath ?? undefined)
   },
 
   deletePlan: async (id) => {
@@ -615,6 +639,12 @@ export function subscribeToMainEvents(): () => void {
     window.flow.events.onPlanUpdated((plan: ScenePlan) => {
       useWorkspaceStore.setState((state) => ({
         plans: state.plans.map((item) => (item.id === plan.id ? plan : item))
+      }))
+    }),
+
+    window.flow.events.onProjectUpdated((project: Project) => {
+      useWorkspaceStore.setState((state) => ({
+        projects: state.projects.map((item) => (item.id === project.id ? project : item))
       }))
     })
   ]

@@ -309,13 +309,28 @@ export class WorkspaceStore {
     return { ...account }
   }
 
-  /** Remembers the Flow project a profile generates into. */
-  async setAccountFlowProject(accountId: string, projectUrl: string | null): Promise<Account | undefined> {
-    const account = this.findAccount(accountId)
-    if (!account) return undefined
-    account.flowProjectUrl = projectUrl
+  /**
+   * Remembers which Flow project this app project uses on a given account, so
+   * every shot of one video lands in the same Flow workspace — same session
+   * history, same media, same characters.
+   */
+  async setProjectFlowUrl(projectId: string, accountId: string, projectUrl: string): Promise<Project | undefined> {
+    const project = this.findProject(projectId)
+    if (!project) return undefined
+
+    project.flowProjects = { ...(project.flowProjects ?? {}), [accountId]: projectUrl }
     await this.flush()
-    return { ...account }
+    return { ...project }
+  }
+
+  async setProjectStitch(projectId: string, path: string | null, url: string | null): Promise<Project | undefined> {
+    const project = this.findProject(projectId)
+    if (!project) return undefined
+    project.stitchedPath = path
+    project.stitchedUrl = url
+    project.updatedAt = nowIso()
+    await this.flush()
+    return { ...project }
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {
