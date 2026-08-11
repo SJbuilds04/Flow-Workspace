@@ -26,7 +26,8 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "predev": "node scripts/ensure-electron.mjs",
+    "preinstall": "node scripts/check-node.mjs",
+    "predev": "node scripts/check-node.mjs && node scripts/ensure-electron.mjs",
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "build": "npm run typecheck && electron-vite build",
