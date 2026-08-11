@@ -12,65 +12,89 @@ Coming from Python? `package.json` is the `requirements.txt`, `npm install` is `
 
 Keep these four open, you will bounce between them:
 
-1. **https://nodejs.org** — to install Node, if you do not have it
-2. **https://console.groq.com/keys** — to create the API key that plans your scenes
-3. **https://labs.google/fx/tools/flow** — to confirm the Google account you plan to use can actually open Flow
+1. **https://labs.google/fx/tools/flow** — check this first. If it shows a marketing page with a _Get started_ button rather than the tool itself, that Google account cannot use Flow, and nothing below will fix that.
+2. **https://nodejs.org** — to install Node, if you do not have it
+3. **https://console.groq.com/keys** — to create the API key that plans your scenes
 4. **https://github.com/SJbuilds04/Flow-Workspace** — this repo
 
 ---
 
 ## Step 1 — Install the prerequisites
 
-| What                    | Why it is needed                                                               |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| **Node.js 20 or newer** | Runs the app and installs everything else                                      |
-| **Git**                 | Downloads the code                                                             |
-| **Google Chrome**       | Google blocks sign-in on automated browsers far more often than on real Chrome |
-| **FFmpeg**              | Joins the finished shots into one video                                        |
+| What                    | Required? | Why                                                |
+| ----------------------- | --------- | -------------------------------------------------- |
+| **Node.js 20 or newer** | Yes       | Runs the app and installs everything else          |
+| **A real browser**      | Yes       | Chrome **or** Edge — see the note below            |
+| **Git**                 | Optional  | Only if you clone; you can download a ZIP instead  |
+| **FFmpeg**              | Optional  | Only for joining the finished shots into one video |
+
+**About the browser.** The app drives a real browser, trying **Chrome → Edge → a bundled Chromium** in that order. Chrome and Edge both work fine; on Windows you already have Edge, so there is usually nothing to install. What you want to avoid is falling all the way through to the bundled Chromium, which carries automation flags Google is much more suspicious of at sign-in.
 
 **Windows**
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
-winget install Git.Git
-winget install Google.Chrome
-winget install Gyan.FFmpeg
+winget install Git.Git          # skip if you download the ZIP
+winget install Gyan.FFmpeg      # skip if you do not need joining
 ```
 
 **macOS**
 
 ```bash
-brew install node git ffmpeg
-brew install --cask google-chrome
+brew install node
+brew install git ffmpeg         # optional
 ```
 
 **Linux (Debian/Ubuntu)**
 
 ```bash
-sudo apt update && sudo apt install -y nodejs npm git ffmpeg
+sudo apt update && sudo apt install -y nodejs npm
+sudo apt install -y git ffmpeg  # optional
 ```
 
-**Close and reopen your terminal**, then check all four:
+**Close and reopen your terminal**, then check:
 
 ```bash
-node -v      # must be v20 or higher
-git --version
-ffmpeg -version
+node -v         # must be v20 or higher
+ffmpeg -version # only if you installed it
 ```
 
-FFmpeg is only needed for the final join step. Everything else works without it, and the app tells you plainly if it is missing.
+Without FFmpeg everything works except the final join, and the app says so plainly rather than failing oddly.
 
 ---
 
-## Step 2 — Get the code and install dependencies
+## Step 2 — Get the code
+
+Pick whichever you prefer. The ZIP needs no Git; cloning makes updates one command instead of a re-download.
+
+### Option A — Download the ZIP (no Git needed)
+
+1. Go to **https://github.com/SJbuilds04/Flow-Workspace**
+2. Click the green **Code** button → **Download ZIP**
+3. Right-click the downloaded file → **Extract All** → pick somewhere simple like `C:\Projects`
+4. Open the extracted folder. If it contains a single folder named `Flow-Workspace-main`, that inner folder is the project
+5. Open a terminal **in that folder**:
+   - **Windows:** click the address bar in File Explorer, type `cmd`, press Enter
+   - **macOS:** right-click the folder → Services → New Terminal at Folder
+
+To update later, download the ZIP again and replace the folder — keeping your own `node_modules` out of it. Your settings, keys and generated videos live outside the project folder, so replacing it loses nothing.
+
+### Option B — Clone with Git
 
 ```bash
 git clone https://github.com/SJbuilds04/Flow-Workspace.git
 cd Flow-Workspace
+```
+
+Updating later is just `git pull`.
+
+### Then, either way
+
+```bash
 npm install
 ```
 
-`npm install` takes a few minutes. It reads `package.json`, downloads the libraries into `node_modules/`, and then downloads a Chromium build for the test runner. The Chromium download is the slow part — that is normal, let it finish.
+This takes a few minutes. It reads `package.json`, downloads the libraries into a local `node_modules/` folder, and then downloads a Chromium build for the test runner. The Chromium download is the slow part — that is normal, let it finish.
 
 ---
 
@@ -141,8 +165,8 @@ Sign-in is manual on purpose. Google blocks scripted credential entry, so there 
 **`bad option: --remote-debugging-port`**
 You are in VS Code's terminal. Use a normal one.
 
-**Sign-in gets refused or looks suspicious to Google**
-Install Chrome. Without it the app falls back to Edge or a bundled Chromium, and Google is much more suspicious of those.
+**Sign-in gets refused or Google says the browser may not be secure**
+The app fell through to its bundled Chromium, which Google distrusts. Install Chrome or Edge — either is fine — and it will use that instead.
 
 **"Couldn't open a Flow project" / it lands on the marketing page**
 Either that account has no Flow access, or first-run setup did not finish. Sign the profile out and back in, and complete the welcome screens yourself in the window that opens.
