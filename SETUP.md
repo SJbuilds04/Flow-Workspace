@@ -59,6 +59,8 @@ node -v         # must be v20 or higher
 ffmpeg -version # only if you installed it
 ```
 
+**Node 20+ genuinely matters.** On an older version `npm install` still appears to succeed, and the failure shows up much later as Electron's binary never arriving — which looks like a network or antivirus problem and is neither. The install refuses to run on an unsupported version rather than letting you find out the hard way. If `node -v` shows something older, install the current LTS from nodejs.org and reopen your terminal.
+
 Without FFmpeg everything works except the final join, and the app says so plainly rather than failing oddly.
 
 ---
@@ -164,17 +166,29 @@ Sign-in is manual on purpose. Google blocks scripted credential entry, so there 
 
 ## When something goes wrong
 
-**`Error: Electron uninstall`, or a message about Electron's binary being missing**
+**`Error: Electron uninstall`, or Electron's binary never appears**
 
-The `electron` package is only a downloader — installing it fetches a ~180 MB binary from GitHub Releases, and that part did not finish. `npm install` can still report success while leaving it absent.
+**Check your Node version first — this is almost always the cause.**
 
-Both `npm install` and `npm run dev` now detect this and re-download automatically, so usually just run:
+```bash
+node -v
+```
+
+Anything below 20 produces exactly this: `npm install` reports success, Electron's downloader exits cleanly, and no binary is ever written. No error, nothing in any log. It looks like antivirus or a network block and is neither. Install the current LTS from https://nodejs.org, **reopen your terminal**, and run `npm install` again.
+
+If Node is current, the download itself may have been interrupted. Both `npm install` and `npm run dev` check for this and re-download automatically, so try:
 
 ```bash
 npm install
 ```
 
-If the download itself keeps failing, something is blocking the fetch from GitHub Releases — antivirus, a corporate network, or a proxy. Behind a proxy, set `ELECTRON_GET_USE_PROXY=true` first. As a last resort, `npm install --force`.
+If it still will not appear, extract it by hand — this always works:
+
+```powershell
+$zip = Get-ChildItem "$env:LOCALAPPDATA\electron\Cache" -Recurse -Filter *.zip | Select-Object -First 1
+Expand-Archive $zip.FullName node_modules\electron\dist -Force
+"electron.exe" | Out-File node_modules\electron\path.txt -Encoding ascii -NoNewline
+```
 
 **`bad option: --remote-debugging-port`**
 You are in VS Code's terminal. Use a normal one.
