@@ -96,7 +96,7 @@ Updating later is just `git pull`.
 npm install
 ```
 
-This takes a few minutes. It reads `package.json`, downloads the libraries into a local `node_modules/` folder, and then pulls down two large binaries: Electron itself (~180 MB) and a Chromium build for the test runner. Those downloads are the slow part — that is normal, let it finish.
+This takes a few minutes. It reads `package.json`, downloads the libraries into a local `node_modules/` folder, and then pulls down two large binaries: Electron itself (~110 MB) and a Chromium build for the test runner. Those downloads are the slow part — that is normal, let it finish.
 
 **Do not interrupt it.** If the Electron download is cut short, `npm install` can still report success while leaving the app unable to start. The install checks for that and re-downloads automatically, and `npm run dev` checks again before launching — but letting it finish the first time is quicker.
 
