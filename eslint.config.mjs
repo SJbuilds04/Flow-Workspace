@@ -49,9 +49,17 @@ export default tseslint.config(
 
   // Main and preload: Node globals.
   {
-    files: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'tests/**/*.ts', '*.config.{ts,js,mjs}'],
+    files: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'tests/**/*.ts', 'scripts/**/*.mjs', '*.config.{ts,js,mjs}'],
     languageOptions: {
       globals: globals.node
+    }
+  },
+
+  {
+    // Install-time scripts talk to the user through stdout; that is their job.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      'no-console': 'off'
     }
   },
 

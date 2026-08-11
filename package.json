@@ -26,6 +26,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
+    "predev": "node scripts/ensure-electron.mjs",
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "build": "npm run typecheck && electron-vite build",
@@ -36,7 +37,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "postinstall": "playwright install chromium",
+    "postinstall": "node scripts/ensure-electron.mjs && playwright install chromium",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:ui": "npm run build && playwright test --ui",
     "dist": "npm run build && electron-builder --dir",
