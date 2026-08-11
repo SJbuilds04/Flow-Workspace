@@ -22,9 +22,13 @@ Nothing here is affiliated with, endorsed by, or supported by Google.
 ## Getting started
 
 ```bash
+git clone https://github.com/SJbuilds04/Flow-Workspace.git
+cd Flow-Workspace
 npm install     # also fetches a Chromium build for the test runner
 npm run dev     # hot-reloading app
 ```
+
+You will also need Node 20+, Google Chrome, FFmpeg, a Groq API key and a Google account with Flow access. **[SETUP.md](SETUP.md) walks through all of it from scratch**, including what each piece is for and what to do when something breaks.
 
 Other scripts:
 
