@@ -94,7 +94,9 @@ Updating later is just `git pull`.
 npm install
 ```
 
-This takes a few minutes. It reads `package.json`, downloads the libraries into a local `node_modules/` folder, and then downloads a Chromium build for the test runner. The Chromium download is the slow part — that is normal, let it finish.
+This takes a few minutes. It reads `package.json`, downloads the libraries into a local `node_modules/` folder, and then pulls down two large binaries: Electron itself (~180 MB) and a Chromium build for the test runner. Those downloads are the slow part — that is normal, let it finish.
+
+**Do not interrupt it.** If the Electron download is cut short, `npm install` can still look successful but `npm run dev` will fail with `Error: Electron uninstall`. See the troubleshooting section if that happens.
 
 ---
 
@@ -161,6 +163,28 @@ Sign-in is manual on purpose. Google blocks scripted credential entry, so there 
 ---
 
 ## When something goes wrong
+
+**`Error: Electron uninstall`** when running `npm run dev`
+
+The `electron` package is only a downloader — its install step fetches a ~180 MB binary from GitHub Releases, and that part did not finish. `npm install` can still report success while leaving it missing.
+
+Check for it:
+
+```bash
+# Windows
+dir node_modules\electron\dist\electron.exe
+
+# macOS / Linux
+ls node_modules/electron/dist
+```
+
+If it is not there, re-run just that download:
+
+```bash
+node node_modules/electron/install.js
+```
+
+Still failing? Something is blocking the download — antivirus, a corporate network, or a proxy. Try `npm install --force`, and if you are behind a proxy set `ELECTRON_GET_USE_PROXY=true` before installing.
 
 **`bad option: --remote-debugging-port`**
 You are in VS Code's terminal. Use a normal one.
