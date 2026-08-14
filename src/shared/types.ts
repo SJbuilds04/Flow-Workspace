@@ -234,7 +234,19 @@ export interface QueueSnapshot {
 export const PLAN_TARGET_DURATIONS: readonly number[] = [15, 30, 60, 90, 120] as const
 
 /** Starting point only — the model id is editable, since providers rotate them. */
-export const DEFAULT_PLANNER_MODEL = 'llama-3.3-70b-versatile'
+export const DEFAULT_PLANNER_MODEL = 'openai/gpt-oss-120b'
+
+/**
+ * Defaults we have shipped before and have since moved on from.
+ *
+ * A stored model id is normally the user's own choice and must be left alone.
+ * But a value that only got there because it was the default at install time is
+ * not a choice, and leaving it behind means an old workspace keeps planning on a
+ * model we no longer stand behind — or one Groq has retired, which surfaces much
+ * later as a failed plan. Anything on this list moves forward once; anything
+ * typed into the field stays exactly as typed.
+ */
+export const SUPERSEDED_PLANNER_MODELS: readonly string[] = ['llama-3.3-70b-versatile'] as const
 
 /** Total runtime of a plan, in seconds. */
 export function planDuration(plan: Pick<ScenePlan, 'scenes'>): number {
