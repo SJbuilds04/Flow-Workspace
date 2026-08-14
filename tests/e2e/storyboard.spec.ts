@@ -25,7 +25,7 @@ test.describe('storyboard', () => {
 
     await expect(window.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible()
     await expect(window.getByLabel('Groq API key')).toBeVisible()
-    await expect(window.getByLabel('Planner model')).toHaveValue('llama-3.3-70b-versatile')
+    await expect(window.getByLabel('Planner model')).toHaveValue('openai/gpt-oss-120b')
   })
 
   test('switching back to Compose restores the prompt box', async ({ window }) => {
@@ -42,7 +42,9 @@ test.describe('storyboard', () => {
     await window.getByRole('button', { name: 'Settings' }).click()
 
     const model = window.getByLabel('Planner model')
-    await model.fill('openai/gpt-oss-120b')
+    // Deliberately not the default: filling in the value it already holds would
+    // pass whether or not the edit was ever persisted.
+    await model.fill('qwen/qwen3.6-27b')
     await model.blur()
 
     await expect
@@ -50,7 +52,7 @@ test.describe('storyboard', () => {
         const raw = await readFile(join(userDataDir, 'workspace.json'), 'utf-8')
         return (JSON.parse(raw) as { settings: { plannerModel: string } }).settings.plannerModel
       })
-      .toBe('openai/gpt-oss-120b')
+      .toBe('qwen/qwen3.6-27b')
   })
 })
 

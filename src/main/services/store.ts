@@ -12,7 +12,13 @@ import type {
   Settings,
   WorkspaceSnapshot
 } from '@shared/types'
-import { ACCOUNT_TONES, DEFAULT_FLOW_MODELS, DEFAULT_PARAMS, DEFAULT_PLANNER_MODEL } from '@shared/types'
+import {
+  ACCOUNT_TONES,
+  DEFAULT_FLOW_MODELS,
+  DEFAULT_PARAMS,
+  DEFAULT_PLANNER_MODEL,
+  SUPERSEDED_PLANNER_MODELS
+} from '@shared/types'
 import { FLOW_URL } from './flow-provider'
 
 const STORE_VERSION = 1
@@ -124,6 +130,10 @@ export class WorkspaceStore {
       // leaves `defaults` partially populated.
       defaults: { ...base.settings.defaults, ...parsed.settings?.defaults },
       flowModels: parsed.settings?.flowModels?.length ? parsed.settings.flowModels : base.settings.flowModels
+    }
+
+    if (SUPERSEDED_PLANNER_MODELS.includes(settings.plannerModel)) {
+      settings.plannerModel = base.settings.plannerModel
     }
 
     if (!accounts.some((account) => account.id === settings.activeAccountId)) {
